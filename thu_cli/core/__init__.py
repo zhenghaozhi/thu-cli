@@ -1,15 +1,4 @@
-"""``core`` — 数据 + 纯函数 + URL 常量。零外部依赖。
-
-外部可访问点：
-
-    errors       全部异常类
-    realms       Realm 定义（LEARN_REALM / WEBVPN_REALM / ...）
-    apps         CampusApp 定义（INFO_PORTAL / TRANSCRIPT_BKS / ...）
-    endpoints    所有 URL 常量与拼装函数（按 domain section 分块）
-    webvpn       webvpn URL 改写工具 + HOST_HASH 表
-
-下层 (sdk / services / cli) 都依赖本层；本层不允许 import 它们。
-"""
+"""Core data types, pure helpers, and endpoint constants."""
 from __future__ import annotations
 
 from .apps import (

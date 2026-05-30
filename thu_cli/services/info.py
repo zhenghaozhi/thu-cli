@@ -1,11 +1,4 @@
-"""``InfoService`` — profile-aware 信息门户 + zhjw 用例。
-
-包装 ``InfoClient``，提供：
-    - WEBVPN_REALM + 对应 CampusApp 的 lazy bootstrap（继承 ``BaseService``）
-    - ``with_reauth`` 在 SessionExpired 时自动重 bootstrap
-    - dataclass 返回（与 sdk.info 一致；不额外再包一层 ``Listing[T]`` —— info 域
-      没有 "学期+课程" 概念，纯粹的单值返回）
-"""
+"""Profile-aware info portal and zhjw use cases."""
 from __future__ import annotations
 
 from datetime import datetime, timedelta
@@ -25,9 +18,8 @@ from .base import BaseService
 
 
 class InfoService(BaseService):
-    """Webvpn-backed 信息门户 + zhjw 客户端。SessionExpired 自动重试一次。"""
+    """Webvpn-backed info portal service with one SessionExpired retry."""
 
-    # ---------------- calendar ----------------
     def get_calendar(
         self,
         user: str | None = None,
@@ -51,7 +43,6 @@ class InfoService(BaseService):
 
         return self.with_reauth(call)
 
-    # ---------------- transcript ----------------
     def get_transcript(
         self,
         user: str | None = None,
@@ -104,7 +95,6 @@ class InfoService(BaseService):
 
         return self.with_reauth(call)
 
-    # ---------------- timetable ----------------
     def get_timetable(
         self,
         user: str | None = None,
@@ -116,7 +106,7 @@ class InfoService(BaseService):
         network: AuthNetwork | None = None,
         policy: AuthPolicy | None = None,
     ) -> list[TimetableEvent]:
-        """``start_date`` / ``end_date`` 任一为 None 时默认本学期；调一次 calendar 取范围。"""
+        """Default missing dates from the current semester calendar."""
         graduate = self._resolve_graduate(user, graduate)
         app = TIMETABLE_YJS if graduate else TIMETABLE_BKS
         need_calendar = start_date is None or end_date is None
@@ -146,9 +136,8 @@ class InfoService(BaseService):
 
         return self.with_reauth(call)
 
-    # ---------------- internal ----------------
     def _resolve_graduate(self, user: str | None, graduate: bool | None) -> bool:
-        """``graduate=None`` 时按 profile 的 student-type 决定（默认 undergraduate）。"""
+        """Resolve student type from explicit override or profile metadata."""
         if graduate is not None:
             return graduate
         selected = self._resolve_user(user)

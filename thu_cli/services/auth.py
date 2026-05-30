@@ -1,13 +1,4 @@
-"""``AuthService`` — profile-aware 认证用例。
-
-把 ``sdk.SsoSession`` 的 stateless 协议引擎与本地 profile / 文件状态织在一起：
-
-- ``login()``      高层登录入口，支持两阶段、强制重登、预热服务
-- ``status()``     本地 + 远程组合状态
-- ``verify()``     ping learn API 判活
-- ``logout()``     清 session（可选 device）
-- profile 管理   add / remove / list / use / current
-"""
+"""Profile-aware authentication use cases."""
 from __future__ import annotations
 
 import json
@@ -39,9 +30,6 @@ from ..sdk.auth import (
 )
 
 
-# ============================================================================
-# 状态值对象
-# ============================================================================
 @dataclass(frozen=True)
 class FileState:
     state: str
@@ -114,10 +102,6 @@ class LoginResult:
     stage_pending: bool = False
     twofa_skipped: bool = False
 
-
-# ============================================================================
-# helper
-# ============================================================================
 def _read_json_object(path: Path) -> dict | None:
     if not path.exists():
         return None
@@ -147,14 +131,9 @@ def _remote_service_names(student_type: str) -> tuple[str, ...]:
     transcript, timetable = _student_apps(student_type)
     return ("learn", "webvpn", "info", transcript.id, timetable.id)
 
-
-# ============================================================================
-# AuthService
-# ============================================================================
 class AuthService:
-    """profile 与 SsoSession 之间的桥。所有 CLI auth 命令都走这里。"""
+    """Bridge between local profiles and ``SsoSession``."""
 
-    # ---------------- profile 管理 ----------------
     def resolve_user(self, user: str | None = None) -> str:
         try:
             resolved = profiles.resolve_user(user)
@@ -188,7 +167,6 @@ class AuthService:
     def set_student_type(self, user: str, student_type: str) -> None:
         profiles.set_student_type(normalize_user(user), student_type)
 
-    # ---------------- 预热 ----------------
     def _prewarm_known_services(
         self,
         selected: str,
@@ -197,12 +175,7 @@ class AuthService:
         interaction: AuthInteraction | None,
         policy: AuthPolicy,
     ) -> None:
-        """Bootstrap thu-cli 目前支持的只读服务，best-effort。
-
-        每个 realm / app 单独 try：失败发 ``on_event("warning", ...)``，不抛。这样
-        登录主流程总能保住 learn realm 的 session（save 在每步之后），其它服务
-        cookie 过期时 lazy bootstrap 自修复。
-        """
+        """Best-effort bootstrap for read-only services supported today."""
         student_type = profiles.get_student_type(selected)
         transcript_app, timetable_app = _student_apps(student_type)
         session_path = profiles.profile_paths(selected).session
@@ -214,26 +187,22 @@ class AuthService:
             (timetable_app.id, lambda p: sso.ensure_app(timetable_app, interaction=interaction, policy=p)),
         )
 
-        # learn realm 已经在 caller 处 ensure 好了；先保存 baseline
         sso.save(session_path)
 
         for name, fn in steps:
             try:
                 fn(policy)
             except SessionExpired:
-                # 一次性失败：强制重 bootstrap 重试一次
                 try:
                     fn(replace(policy, force_login=True))
                 except Exception as e:
                     if sso.on_event is not None:
-                        sso.on_event("warning", f"预热 {name} 失败：{e}")
+                        sso.on_event("warning", f"prewarm {name} failed: {e}")
             except Exception as e:
                 if sso.on_event is not None:
-                    sso.on_event("warning", f"预热 {name} 跳过：{e}")
-            # 每步之后保存 — 即使后续失败，前面的进展不丢
+                    sso.on_event("warning", f"prewarm {name} skipped: {e}")
             sso.save(session_path)
 
-    # ---------------- 状态查询 ----------------
     def local_auth_state(self, user: str) -> LocalAuthState:
         paths = profiles.profile_paths(user)
         session_data = _read_json_object(paths.session)
@@ -275,7 +244,6 @@ class AuthService:
             ))
         return rows
 
-    # ---------------- 登录 ----------------
     def login(
         self,
         user: str,
@@ -288,15 +256,7 @@ class AuthService:
         code: str | None = None,
         force: bool = False,
     ) -> LoginResult:
-        """高层登录：profile 切换 + stage.json 持久化 + 缓存 session 复用。
-
-        三条路径：
-            stage="verify"：从 stage.json resume 一次已 send 过码的 2FA
-            stage="send"：触发 SEND_CODE 后抛 ``TwoFactorPending``，写 stage.json 等
-                          后续 ``--stage verify --code XXXXXX``
-            其它：       完整 ``ensure_realm(LEARN_REALM)``，缓存 session 默认复用，
-                          ``force=True`` 时强制重登
-        """
+        """Run login, including two-stage 2FA state persistence."""
         network = network or AuthNetwork()
         policy = policy or AuthPolicy()
         if force:
@@ -306,7 +266,6 @@ class AuthService:
             profiles.set_student_type(selected, student_type)
         paths = profiles.profile_paths(selected)
 
-        # ---------- Path A: resume ----------
         if stage == "verify":
             if not paths.stage.exists():
                 raise AuthError(f"stage file not found: {paths.stage}")
@@ -345,7 +304,6 @@ class AuthService:
             paths.stage.unlink(missing_ok=True)
             return LoginResult(selected, paths.session)
 
-        # ---------- Path B/C: deferred 或 normal ----------
         if interaction.passwd_fn is None:
             raise AuthError("interaction.passwd_fn is required for login")
 
@@ -360,7 +318,6 @@ class AuthService:
         )
         sso.username = selected
 
-        # Load 缓存 session（用于 verify_realm 短路）
         loaded = SsoSession.load(
             paths.session,
             device=device,
@@ -385,7 +342,7 @@ class AuthService:
                 cached = True
 
         if not cached:
-            # 预热可能多次需要密码；先 prompt 一次缓存起来
+            # Prewarm may need the password more than once.
             if interaction.passwd_fn is not None and sso._cached_password is None:
                 sso._cached_password = interaction.passwd_fn()
             try:
@@ -405,7 +362,6 @@ class AuthService:
             twofa_skipped=(stage == "send" and not cached),
         )
 
-    # ---------------- verify / status / logout ----------------
     def verify(
         self,
         user: str | None = None,

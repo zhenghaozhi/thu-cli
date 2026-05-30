@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "thu-cli"
 version = "0.2.0"
-description = "清华统一认证 / 网络学堂 / 信息门户的 Python CLI 和 SDK"
+description = "Python CLI and SDK for Tsinghua SSO, Web Learning, and info portal"
 requires-python = ">=3.10"
 dependencies = [
   "beautifulsoup4",

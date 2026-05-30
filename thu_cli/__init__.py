@@ -1,13 +1,4 @@
-"""thu-cli — 清华统一认证 / 网络学堂 / 信息门户的 Python CLI 和 SDK.
-
-公共 SDK 表面（按抽象排序）：
-
-    1. Service 层（推荐）  LearnService / InfoService — 已封装重登 / fanout / warning
-    2. Client 层          LearnClient(sso) / InfoClient(sso) — 自己管 SsoSession 时用
-    3. SsoSession 层      自己处理 2FA / 信任设备 / 多 realm bootstrap
-
-完整文档见 README.md。
-"""
+"""Python CLI and SDK for Tsinghua SSO, Web Learning, and info portal."""
 from __future__ import annotations
 
 from .core.errors import (

@@ -1,15 +1,7 @@
-"""本地 profile 注册表。
+"""Local profile registry.
 
-Profile 只记账号 ID + 该账号 auth 文件位置。**不存密码**。
-
-文件布局：
-    $THU_CLI_HOME/                          默认 ~/.config/thu-cli
-        config.json                         {"current_user": ..., "profiles": {...}}
-        users/<id>/
-            session.json                    cookies + bootstrap 时间戳
-            device.json                     设备指纹
-            stage.json                      两阶段 2FA 的 pending 状态
-            last_captcha.jpg                上一次图形验证码（debug 用）
+Profiles store account IDs and auth file locations only. Passwords are never
+stored.
 """
 from __future__ import annotations
 
@@ -142,11 +134,7 @@ def set_current_user(user: str) -> str:
 
 
 def remove_profile(user: str, *, delete_data: bool = False) -> bool:
-    """删除 profile；profile 不存在时返回 False 且不删任何文件。
-
-    ``delete_data=True`` 仅在 profile 实际存在时才会 rmtree 其 session/device/stage 目录 —
-    避免误删孤立用户目录。
-    """
+    """Remove a registered profile and optionally its data directory."""
     user = normalize_user(user)
     cfg = load_config()
     existed = user in cfg["profiles"]
@@ -163,7 +151,7 @@ def remove_profile(user: str, *, delete_data: bool = False) -> bool:
 
 
 def resolve_user(arg_user: str | None = None, *, use_current: bool = True) -> str | None:
-    """凭据来源优先级：``arg_user`` > ``$THU_USER`` > current profile。"""
+    """Resolve user from ``arg_user`` > ``$THU_USER`` > current profile."""
     raw = (arg_user or os.environ.get("THU_USER", "")).strip()
     if raw:
         return normalize_user(raw)
@@ -173,10 +161,7 @@ def resolve_user(arg_user: str | None = None, *, use_current: bool = True) -> st
 
 
 def get_student_type(user: str) -> str:
-    """返回持久化的 student type："undergraduate" 或 "graduate"。
-
-    未设置或非法值时 fallback 到 "undergraduate"。
-    """
+    """Return persisted student type, defaulting to ``undergraduate``."""
     user = normalize_user(user)
     cfg = load_config()
     meta = cfg.get("profiles", {}).get(user, {})

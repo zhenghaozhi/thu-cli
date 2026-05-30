@@ -1,4 +1,4 @@
-"""``thu info transcript`` — 历年成绩单 + GPA 汇总。"""
+"""``thu info transcript`` command."""
 from __future__ import annotations
 
 import argparse
@@ -8,11 +8,12 @@ from ..._common import CommandContext, add_network_flags
 from ...output import register_renderer
 
 NAME = "transcript"
-HELP = "历年成绩单 + 官方/明细 GPA"
+HELP = "CMD_INFO_TRANSCRIPT"
 
 
 def register(subparsers: argparse._SubParsersAction) -> None:
-    p = subparsers.add_parser(NAME, help=HELP, description=HELP)
+    help_text = getattr(M, HELP)
+    p = subparsers.add_parser(NAME, help=help_text, description=help_text)
     add_network_flags(p)
     p.add_argument("--user", help=M.HELP_USER)
     g = p.add_mutually_exclusive_group()

@@ -1,4 +1,4 @@
-"""``thu learn course`` — 列课程，默认本学期。"""
+"""``thu learn course`` command."""
 from __future__ import annotations
 
 import argparse
@@ -8,11 +8,12 @@ from ..._common import CommandContext, add_network_flags
 from ...output import register_renderer
 
 NAME = "course"
-HELP = "列课程，默认本学期"
+HELP = "CMD_LEARN_COURSE"
 
 
 def register(subparsers: argparse._SubParsersAction) -> None:
-    p = subparsers.add_parser(NAME, help=HELP, description=HELP)
+    help_text = getattr(M, HELP)
+    p = subparsers.add_parser(NAME, help=help_text, description=help_text)
     add_network_flags(p)
     p.add_argument("--user", help=M.HELP_USER)
     scope = p.add_mutually_exclusive_group()

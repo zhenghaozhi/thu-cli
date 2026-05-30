@@ -1,4 +1,4 @@
-"""``thu info timetable`` — 课程表 + 考试日历。"""
+"""``thu info timetable`` command."""
 from __future__ import annotations
 
 import argparse
@@ -9,11 +9,12 @@ from ..._common import CommandContext, add_network_flags
 from ...output import register_renderer
 
 NAME = "timetable"
-HELP = "课程表 / 考试日历"
+HELP = "CMD_INFO_TIMETABLE"
 
 
 def register(subparsers: argparse._SubParsersAction) -> None:
-    p = subparsers.add_parser(NAME, help=HELP, description=HELP)
+    help_text = getattr(M, HELP)
+    p = subparsers.add_parser(NAME, help=help_text, description=help_text)
     add_network_flags(p)
     p.add_argument("--user", help=M.HELP_USER)
     p.add_argument("--start", help=M.HELP_TIMETABLE_START)

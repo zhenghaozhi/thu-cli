@@ -1,4 +1,4 @@
-"""``core.realms`` / ``core.apps`` 单元测试。"""
+"""Unit tests for ``core.realms`` and ``core.apps``."""
 from __future__ import annotations
 
 import pytest

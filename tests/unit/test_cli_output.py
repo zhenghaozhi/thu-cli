@@ -1,4 +1,4 @@
-"""``cli.output.to_json`` 单元测试（dataclass / Path / Enum 序列化）。"""
+"""Unit tests for ``cli.output.to_json``."""
 from __future__ import annotations
 
 import json

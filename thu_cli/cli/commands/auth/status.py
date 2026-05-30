@@ -1,4 +1,4 @@
-"""``thu auth status`` — 本地认证状态 + 远程服务可用性。"""
+"""``thu auth status`` command."""
 from __future__ import annotations
 
 import argparse
@@ -8,11 +8,12 @@ from ..._common import CommandContext, add_network_flags
 from ...prompts import build_network
 
 NAME = "status"
-HELP = "显示本地认证状态并默认远程验证"
+HELP = "CMD_AUTH_STATUS"
 
 
 def register(subparsers: argparse._SubParsersAction) -> None:
-    p = subparsers.add_parser(NAME, help=HELP, description=HELP)
+    help_text = getattr(M, HELP)
+    p = subparsers.add_parser(NAME, help=help_text, description=help_text)
     add_network_flags(p)
     p.add_argument("--user", help=M.HELP_USER)
     p.add_argument("--offline", action="store_true", help=M.HELP_OFFLINE)

@@ -1,8 +1,8 @@
-"""终端 prompts + AuthInteraction 构造。
+"""Terminal prompts and auth option builders.
 
-把 argparse Namespace 翻译成 ``AuthInteraction`` / ``AuthNetwork`` / ``AuthPolicy``。
-这是**唯一**允许构造 AuthInteraction 的地方（架构测试钉死）— 避免每个命令文件重复
-组装 14-kwarg fanout。
+This module translates ``argparse.Namespace`` into ``AuthInteraction``,
+``AuthNetwork``, and ``AuthPolicy``. It is the only place that should build
+``AuthInteraction`` for CLI commands, keeping auth callback wiring centralized.
 """
 from __future__ import annotations
 
@@ -18,14 +18,8 @@ from ..sdk.auth import AuthInteraction, AuthNetwork, AuthPolicy
 from .output import ui
 
 
-# ============================================================================
-# user / password 输入
-# ============================================================================
 def read_user(arg_user: str | None = None, *, use_current: bool = True) -> str:
-    """凭据来源：``arg_user`` > ``$THU_USER`` > current profile > 交互。
-
-    非 tty 且都缺失抛 ``AuthError``。
-    """
+    """Resolve user from ``arg_user`` > ``$THU_USER`` > current profile > prompt."""
     try:
         user = profiles.resolve_user(arg_user, use_current=use_current)
     except ValueError as e:
@@ -33,39 +27,34 @@ def read_user(arg_user: str | None = None, *, use_current: bool = True) -> str:
     if user:
         return user
     if not sys.stdin.isatty():
-        raise AuthError(
-            "缺学号：请设置 THU_USER、用 --user 指定、先 `thu auth use <id>`，或在交互式终端运行"
-        )
+        raise AuthError(M.ERR_MISSING_USER)
     return ui.prompt(M.PROMPT_USER)
 
 
 def read_passwd() -> str:
-    """``$THU_PASS`` 优先；否则 tty 用 getpass；非 tty 且无 env 抛 ``AuthError``。"""
+    """Read password from ``$THU_PASS`` or an interactive secret prompt."""
     p = os.environ.get("THU_PASS", "")
     if p:
         return p
     if not sys.stdin.isatty():
-        raise AuthError("缺密码：请设置 THU_PASS 或在交互式终端运行")
+        raise AuthError(M.ERR_MISSING_PASSWORD)
     try:
         return ui.secret(M.PROMPT_PASSWORD)
     except EOFError as e:
-        raise AuthError("缺密码：请设置 THU_PASS 或在交互式终端运行") from e
+        raise AuthError(M.ERR_MISSING_PASSWORD) from e
 
 
-# ============================================================================
-# 2FA / captcha 回调
-# ============================================================================
 def choose_2fa(approaches_obj: dict) -> str:
-    """从 ``FIND_APPROACHES`` 返回的选项里让用户选一个。"""
+    """Ask the user to choose one option from ``FIND_APPROACHES``."""
     options: list[tuple[str, str]] = []
     if approaches_obj.get("hasWeChatBool"):
-        options.append(("wechat", "企业微信"))
+        options.append(("wechat", M.METHOD_2FA_WECHAT))
     if approaches_obj.get("phone"):
-        options.append(("mobile", f"手机短信 {approaches_obj['phone']}"))
+        options.append(("mobile", M.METHOD_2FA_MOBILE.format(phone=approaches_obj["phone"])))
     if approaches_obj.get("hasTotp"):
-        options.append(("totp", "TOTP 动态口令"))
+        options.append(("totp", M.METHOD_2FA_TOTP))
     if not options:
-        raise AuthError(f"账号未绑定任何 2FA 方式：{approaches_obj}")
+        raise AuthError(f"account has no 2FA method bound: {approaches_obj}")
     if len(options) == 1:
         return options[0][0]
 
@@ -81,8 +70,16 @@ def read_code(prompt: str) -> str:
     return ui.prompt(prompt.rstrip(": "))
 
 
+def code_prompt(choice: str) -> str:
+    return {
+        "wechat": M.PROMPT_2FA_CODE_WECHAT,
+        "mobile": M.PROMPT_2FA_CODE_MOBILE,
+        "totp": M.PROMPT_2FA_CODE_TOTP,
+    }.get(choice, choice)
+
+
 def trust_device_choice(opt: str) -> bool | str | Callable[[], bool]:
-    """归一化 ``--trust-device`` 字符串到 ``AuthInteraction.trust_device`` 接受的类型。"""
+    """Normalize ``--trust-device`` into an ``AuthInteraction`` value."""
     if opt == "ask":
         return lambda: ui.confirm(M.PROMPT_TRUST_DEVICE, default=False)
     return {"yes": True, "no": False}[opt]
@@ -96,21 +93,15 @@ def captcha_prompt(path: Path) -> Callable[[bytes], str]:
         return ui.prompt(M.PROMPT_CAPTCHA)
     return _read_captcha
 
-
-# ============================================================================
-# 构造 AuthInteraction / AuthNetwork / AuthPolicy
-# ============================================================================
 def build_interaction(args: argparse.Namespace, captcha_path: Path) -> AuthInteraction:
-    """把 argparse + 终端回调装成 AuthInteraction。
-
-    ``--trust-device`` 只在 ``thu auth login`` 上存在；对其它命令安静地默认 no-trust。
-    """
+    """Build ``AuthInteraction`` from argparse and terminal callbacks."""
     trust_arg = getattr(args, "trust_device", None)
     trust = trust_device_choice(trust_arg) if trust_arg is not None else False
     return AuthInteraction(
         passwd_fn=read_passwd,
         on_2fa_choice=choose_2fa,
         on_code=read_code,
+        code_prompt=code_prompt,
         on_captcha=captcha_prompt(captcha_path),
         trust_device=trust,
     )
@@ -144,6 +135,7 @@ __all__ = [
     "build_policy",
     "captcha_prompt",
     "choose_2fa",
+    "code_prompt",
     "read_code",
     "read_passwd",
     "read_user",

@@ -1,9 +1,9 @@
-"""清华网络学堂 HTTP 客户端。
+"""HTTP client for Tsinghua Web Learning.
 
-公开接口：
+Public surface:
 
-    LearnClient(sso)                                包装 ``SsoSession`` 调 learn API
-    LearnClient.user_info()                         用户基本信息
+    LearnClient(sso)                                wraps ``SsoSession`` for learn APIs
+    LearnClient.user_info()                         basic user info
     LearnClient.current_semester() / list_semesters
     LearnClient.list_courses(...)
     LearnClient.list_course_announcements(...)
@@ -14,10 +14,8 @@
     LearnClient.list_answered_questions(...)
     LearnClient.list_questionnaires(...)
     LearnClient.download_remote_file(...)
-    ... 详见各方法
-
-跨子系统通用的协议工具（``_csrf`` / ``json_or_expired`` / ``RemoteFile`` / ``stream_download``）
-在 ``sdk.transport``；本模块只放 learn 专属逻辑。
+Shared protocol utilities live in ``sdk.transport``; this module keeps only
+learn-specific behavior.
 """
 from __future__ import annotations
 
@@ -68,6 +66,13 @@ from ..core.endpoints import (
     learn_questionnaire_url,
 )
 from ..core.errors import LearnError, LearnFailReason, SessionExpired
+from ._literals import (
+    LEARN_EXPIRED_MARKER,
+    LEARN_OPEN_TIME_VALUE,
+    LEARN_SUCCESS_SUFFIX,
+    SERVER_NO,
+    SERVER_YES,
+)
 from .auth import SsoSession
 from .transport import (
     RemoteFile,
@@ -82,9 +87,6 @@ from .transport import (
 logger = logging.getLogger("thu_cli.sdk.learn")
 
 
-# ============================================================================
-# 内部 helper
-# ============================================================================
 def _csrf(http: requests.Session) -> dict[str, str]:
     return csrf_params(http, domain=LEARN_DOMAIN)
 
@@ -95,13 +97,13 @@ def _require_success(payload: Any, context: str) -> Any:
     msg = payload.get("msg") if isinstance(payload, dict) else None
     raise LearnError(
         LearnFailReason.OPERATION_FAILED,
-        f"{context} 返回失败：{msg or '<no message>'}",
+        f"{context} failed: {msg or '<no message>'}",
         payload=payload,
     )
 
 
 def semester_from_course_id(course_id: str) -> str | None:
-    """从 wlkcid 前缀推学期，例如 ``2025-2026-215...`` → ``2025-2026-2``。"""
+    """Infer semester from a ``wlkcid`` prefix such as ``2025-2026-215...``."""
     parts = course_id.split("-", 2)
     if len(parts) != 3 or not parts[2]:
         return None
@@ -123,11 +125,11 @@ def _int(raw: dict, key: str) -> int:
 
 
 def _truthy(value: Any) -> bool:
-    return str(value).strip().lower() in {"1", "true", "yes", "是"}
+    return str(value).strip().lower() in {"1", "true", "yes", SERVER_YES}
 
 
 def _falsey(value: Any) -> bool:
-    return str(value).strip().lower() in {"0", "false", "no", "否"}
+    return str(value).strip().lower() in {"0", "false", "no", SERVER_NO}
 
 
 def _decode_announcement_html(raw: dict) -> str | None:
@@ -190,9 +192,6 @@ def _announcement_ao_data(course_id: str, start: int, length: int) -> list[dict[
     ]
 
 
-# ============================================================================
-# 枚举
-# ============================================================================
 class ContentKind(str, Enum):
     ANNOUNCEMENT = "announcement"
     FILE = "file"
@@ -202,10 +201,6 @@ class ContentKind(str, Enum):
     QUESTIONNAIRE = "questionnaire"
 
 
-# ============================================================================
-# 数据对象
-# ============================================================================
-# AnnouncementAttachment 是 RemoteFile 的语义别名（学堂公告附件）
 class AnnouncementAttachment(RemoteFile):
     pass
 
@@ -319,7 +314,7 @@ class Announcement:
 
         expired = None
         if raw.get("sfgq") not in (None, ""):
-            expired = str(raw.get("sfgq")) == "已过期"
+            expired = str(raw.get("sfgq")) == LEARN_EXPIRED_MARKER
 
         return cls(
             id=_text(raw, "ggid") or _text(raw, "id"),
@@ -722,11 +717,8 @@ class CourseContentBundle:
         return self.contents[ContentKind(kind)]
 
 
-# ============================================================================
-# 主类
-# ============================================================================
 class LearnClient:
-    """网络学堂客户端。所有方法假设 ``sso`` 已经 bootstrap 了 LEARN_REALM。"""
+    """Web Learning client; callers must bootstrap ``LEARN_REALM`` first."""
 
     def __init__(self, sso: SsoSession):
         self.sso = sso
@@ -735,7 +727,6 @@ class LearnClient:
     def http(self) -> requests.Session:
         return self.sso.http
 
-    # ---------------- 用户 / 学期 ----------------
     def user_info(self) -> UserInfo:
         r = self.http.get(
             LEARN_HOMEPAGE,
@@ -768,14 +759,14 @@ class LearnClient:
         if not isinstance(payload, dict) or payload.get("message") != "success":
             raise LearnError(
                 LearnFailReason.INVALID_RESPONSE,
-                "learn current semester 返回异常",
+                "learn current semester returned an invalid payload",
                 payload=payload,
             )
         result = payload.get("result")
         if not isinstance(result, dict):
             raise LearnError(
                 LearnFailReason.INVALID_RESPONSE,
-                "learn current semester result 不是对象",
+                "learn current semester result is not an object",
                 payload=payload,
             )
         return SemesterInfo.from_raw(result)
@@ -786,7 +777,7 @@ class LearnClient:
         self.sso.dump_response("learn_semesters", r)
         data = json_or_expired(r)
         if not isinstance(data, list):
-            raise SessionExpired(f"learn semesters 返回非列表：{type(data).__name__}")
+            raise SessionExpired(f"learn semesters returned non-list: {type(data).__name__}")
         semesters: list[str] = []
         seen: set[str] = set()
         for item in data:
@@ -798,7 +789,6 @@ class LearnClient:
                 seen.add(s)
         return semesters
 
-    # ---------------- 课程 ----------------
     def list_courses_raw(
         self,
         semester: str | None = None,
@@ -830,14 +820,14 @@ class LearnClient:
         if not isinstance(payload, dict) or payload.get("message") != "success":
             raise LearnError(
                 LearnFailReason.INVALID_RESPONSE,
-                "learn courses 返回异常",
+                "learn courses returned an invalid payload",
                 payload=payload,
             )
         result = payload.get("resultList")
         if not isinstance(result, list):
             raise LearnError(
                 LearnFailReason.INVALID_RESPONSE,
-                "learn courses resultList 不是列表",
+                "learn courses resultList is not a list",
                 payload=payload,
             )
         return result
@@ -869,7 +859,7 @@ class LearnClient:
         if not isinstance(payload, list):
             raise LearnError(
                 LearnFailReason.INVALID_RESPONSE,
-                "learn course time/location 返回非列表",
+                "learn course time/location returned non-list",
                 payload=payload,
             )
         return [str(item) for item in payload if item]
@@ -881,7 +871,6 @@ class LearnClient:
             logger.debug("failed to fetch course time/location for %s", course.id, exc_info=True)
             return course
 
-    # ---------------- 公告 ----------------
     def list_announcement_summaries(
         self,
         course_ids: list[str],
@@ -912,9 +901,9 @@ class LearnClient:
         unread_only: bool,
     ) -> list[dict]:
         data: list[tuple[str, str]] = [
-            ("kssj", "时间不限"),
-            ("jssj", "时间不限"),
-            ("sfdwc", "是" if unread_only else ""),
+            ("kssj", LEARN_OPEN_TIME_VALUE),
+            ("jssj", LEARN_OPEN_TIME_VALUE),
+            ("sfdwc", SERVER_YES if unread_only else ""),
         ]
         data.extend(("wlkcids[]", cid) for cid in course_ids)
         r = self.http.post(
@@ -987,10 +976,7 @@ class LearnClient:
     def announcement_attachments(
         self, course_id: str, announcement_id: str,
     ) -> list[AnnouncementAttachment]:
-        """从 HTML 详情页解出附件元数据。
-
-        访问详情页可能将公告标记为已读，调用方应仅在显式详情/下载流程使用。
-        """
+        """Parse attachment metadata from the HTML detail page."""
         r = self.http.get(
             learn_announcement_view_url(course_id, announcement_id),
             params=_csrf(self.http),
@@ -1028,7 +1014,6 @@ class LearnClient:
             )
         return attachments
 
-    # ---------------- 课件 ----------------
     def list_course_files(
         self,
         course_id: str,
@@ -1053,7 +1038,7 @@ class LearnClient:
         if not isinstance(rows, list):
             raise LearnError(
                 LearnFailReason.INVALID_RESPONSE,
-                "learn course files object 不是列表",
+                "learn course files object is not a list",
                 payload=payload,
             )
         return [CourseFile.from_raw(row, course=course) for row in rows]
@@ -1071,7 +1056,7 @@ class LearnClient:
         if not isinstance(rows, list):
             raise LearnError(
                 LearnFailReason.INVALID_RESPONSE,
-                "learn file categories rows 不是列表",
+                "learn file categories rows is not a list",
                 payload=payload,
             )
         return [FileCategory.from_raw(row, course_id=course_id) for row in rows]
@@ -1102,7 +1087,7 @@ class LearnClient:
         if not isinstance(rows, list):
             raise LearnError(
                 LearnFailReason.INVALID_RESPONSE,
-                "learn course files by category object 不是列表",
+                "learn course files by category object is not a list",
                 payload=payload,
             )
         return [
@@ -1119,7 +1104,6 @@ class LearnClient:
                 return item
         return None
 
-    # ---------------- 讨论 / 答疑 ----------------
     def list_course_discussions(
         self, course_id: str, *, course: Course | None = None,
     ) -> list[Discussion]:
@@ -1135,7 +1119,7 @@ class LearnClient:
         if not isinstance(rows, list):
             raise LearnError(
                 LearnFailReason.INVALID_RESPONSE,
-                "learn course discussions resultsList 不是列表",
+                "learn course discussions resultsList is not a list",
                 payload=payload,
             )
         return [Discussion.from_raw(row, course=course) for row in rows]
@@ -1155,12 +1139,11 @@ class LearnClient:
         if not isinstance(rows, list):
             raise LearnError(
                 LearnFailReason.INVALID_RESPONSE,
-                "learn answered questions resultsList 不是列表",
+                "learn answered questions resultsList is not a list",
                 payload=payload,
             )
         return [AnsweredQuestion.from_raw(row, course=course) for row in rows]
 
-    # ---------------- 问卷 ----------------
     def list_questionnaires(
         self,
         course_id: str,
@@ -1197,7 +1180,7 @@ class LearnClient:
         if not isinstance(rows, list):
             raise LearnError(
                 LearnFailReason.INVALID_RESPONSE,
-                "learn questionnaires aaData 不是列表",
+                "learn questionnaires aaData is not a list",
                 payload=payload,
             )
         questionnaires: list[Questionnaire] = []
@@ -1224,12 +1207,11 @@ class LearnClient:
         if not isinstance(payload, list):
             raise LearnError(
                 LearnFailReason.INVALID_RESPONSE,
-                "learn questionnaire detail 不是列表",
+                "learn questionnaire detail is not a list",
                 payload=payload,
             )
         return [QuestionnaireQuestion.from_raw(row) for row in payload if isinstance(row, dict)]
 
-    # ---------------- 跨类型聚合 ----------------
     def list_course_contents(
         self,
         course_id: str,
@@ -1264,7 +1246,6 @@ class LearnClient:
             contents=contents,
         )
 
-    # ---------------- 作业 ----------------
     def list_course_homeworks(
         self,
         course_id: str,
@@ -1308,7 +1289,7 @@ class LearnClient:
         if not isinstance(rows, list):
             raise LearnError(
                 LearnFailReason.INVALID_RESPONSE,
-                "learn course homeworks aaData 不是列表",
+                "learn course homeworks aaData is not a list",
                 payload=payload,
             )
         return [
@@ -1413,7 +1394,7 @@ class LearnClient:
                 fh.close()
         self.sso.dump_response("learn_homework_submit", r)
         payload = _require_success(json_or_expired(r), "learn homework submit")
-        if not str(payload.get("msg") or "").endswith("成功"):
+        if not str(payload.get("msg") or "").endswith(LEARN_SUCCESS_SUFFIX):
             logger.debug("homework submit success without success msg: %s", payload)
 
     def _homework_page_files(self, homework: Homework) -> list[RemoteFile]:
@@ -1451,7 +1432,6 @@ class LearnClient:
             ))
         return files
 
-    # ---------------- 下载 ----------------
     def download_remote_file(
         self,
         remote_file: RemoteFile,

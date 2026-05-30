@@ -1,19 +1,4 @@
-"""跨子系统共享的协议工具箱。
-
-只放与具体业务（learn / info / ...）无关的 HTTP / 协议原语：
-
-    RemoteFile                       通用 "远端可下载文件" 对象
-    csrf_params(http, *, domain)     从指定域名取 XSRF-TOKEN 拼 _csrf
-    json_or_expired(r)               JSON 解析；HTML/302/401/403 抛 SessionExpired
-    raise_if_unauthenticated(r)      非 JSON endpoint 的 session 失效检测
-    safe_filename(name)              文件名清洗
-    unique_path(path)                避免覆盖：file.ext → file-1.ext
-    content_disposition_filename     从 header 解出 filename
-    display_time / display_size      展示用格式化
-    stream_download                  流式下载
-
-下游 client 失败时抛 ``RuntimeError``，由具体业务层翻译成自己的领域异常。
-"""
+"""Protocol helpers shared across SDK clients."""
 from __future__ import annotations
 
 import logging
@@ -33,10 +18,9 @@ from ..core.errors import SessionExpired
 logger = logging.getLogger("thu_cli.sdk.transport")
 
 
-# ---------------- 数据对象 ----------------
 @dataclass(frozen=True)
 class RemoteFile:
-    """远端可下载文件的通用描述。各业务客户端可直接复用或派生。"""
+    """Common description for a remote downloadable file."""
     id: str
     name: str
     download_url: str
@@ -47,46 +31,38 @@ class RemoteFile:
         return safe_filename(self.name)
 
 
-# ---------------- 协议原语 ----------------
 def csrf_params(http: requests.Session, *, domain: str) -> dict[str, str]:
-    """从指定域名的 XSRF-TOKEN cookie 拼 ``_csrf`` 参数。缺失抛 SessionExpired。
-
-    ``domain`` 必传：thu 各子站 cookie 范围不同，learn / cloud / git 各有各的域。
-    """
+    """Build ``_csrf`` params from an XSRF-TOKEN cookie for ``domain``."""
     token = http.cookies.get("XSRF-TOKEN", domain=domain) or http.cookies.get("XSRF-TOKEN")
     if not token:
-        raise SessionExpired(f"{domain} 域无 XSRF-TOKEN，需重新登录")
+        raise SessionExpired(f"{domain} has no XSRF-TOKEN; re-login required")
     return {"_csrf": token}
 
 
 def json_or_expired(r: requests.Response) -> Any:
-    """期望 JSON；拿到 HTML / 302 / 401 / 403 视为 session 失效。"""
+    """Parse JSON or raise ``SessionExpired`` for login-like responses."""
     ct = r.headers.get("Content-Type", "")
     if r.status_code in (302, 401, 403) or "html" in ct:
-        raise SessionExpired(f"API 返回非 JSON（status={r.status_code} ct={ct!r}）")
+        raise SessionExpired(f"API returned non-JSON status={r.status_code} ct={ct!r}")
     try:
         return r.json()
     except ValueError as e:
-        raise SessionExpired(f"API JSON 解析失败：{e}") from e
+        raise SessionExpired(f"API JSON parse failed: {e}") from e
 
 
 def raise_if_unauthenticated(r: requests.Response, *, context: str = "request") -> None:
-    """非 JSON 期望的 endpoint（HTML 详情页、下载等）的 session 失效检测。
-
-    仅按 302 / 401 / 403 判定；HTML 内容本身可能是合法响应。
-    """
+    """Detect auth loss for endpoints that may legitimately return HTML."""
     if r.status_code in (302, 401, 403):
-        raise SessionExpired(f"{context} 需要重新登录：status={r.status_code}")
+        raise SessionExpired(f"{context} requires re-login: status={r.status_code}")
 
 
-# ---------------- 文件名 / 路径 ----------------
 def safe_filename(name: str) -> str:
     cleaned = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", name).strip().strip(".")
     return cleaned or "download"
 
 
 def unique_path(path: Path) -> Path:
-    """同名已存在时附加 ``-1`` / ``-2`` / ... 后缀；上限 999 后抛 RuntimeError。"""
+    """Append ``-1`` / ``-2`` / ... when the target path already exists."""
     if not path.exists():
         return path
     stem = path.stem
@@ -96,7 +72,7 @@ def unique_path(path: Path) -> Path:
         candidate = parent / f"{stem}-{idx}{suffix}"
         if not candidate.exists():
             return candidate
-    raise RuntimeError(f"无法生成下载文件名：{path}")
+    raise RuntimeError(f"cannot allocate download filename: {path}")
 
 
 def content_disposition_filename(value: str | None) -> str | None:
@@ -111,9 +87,8 @@ def content_disposition_filename(value: str | None) -> str | None:
     return None
 
 
-# ---------------- 格式化 ----------------
 def display_time(value: Any) -> str:
-    """毫秒时间戳 → "YYYY-MM-DD HH:MM:SS"，否则原样返回（HTML 转义解码）。"""
+    """Format millisecond timestamps, otherwise return unescaped text."""
     if value in (None, ""):
         return ""
     text = str(value)
@@ -126,7 +101,7 @@ def display_time(value: Any) -> str:
 
 
 def display_size(value: Any) -> str:
-    """字节数 → "1.2 MB"，非数字原样返回。"""
+    """Format byte counts, otherwise return the original text."""
     if value in (None, ""):
         return ""
     text = str(value)
@@ -141,7 +116,6 @@ def display_size(value: Any) -> str:
     return text
 
 
-# ---------------- 下载 ----------------
 def stream_download(
     http: requests.Session,
     remote_file: RemoteFile,
@@ -153,11 +127,7 @@ def stream_download(
     chunk_size: int = 1024 * 256,
     timeout: int = 60,
 ) -> Path:
-    """通用流式下载。
-
-    cookie 失效抛 ``SessionExpired``；其它 HTTP 非 200 抛 ``RuntimeError``。
-    具体业务 client 应捕获 ``RuntimeError`` 并翻译为自己的领域异常。
-    """
+    """Stream a remote file to disk."""
     dest = Path(dest_dir)
     dest.mkdir(parents=True, exist_ok=True)
     r = http.get(
@@ -172,7 +142,7 @@ def stream_download(
     ct = r.headers.get("Content-Type", "")
     if r.status_code in (302, 401, 403) or "html" in ct:
         r.close()
-        raise SessionExpired(f"download 需要重新登录：status={r.status_code} ct={ct!r}")
+        raise SessionExpired(f"download requires re-login: status={r.status_code} ct={ct!r}")
     if r.status_code != 200:
         r.close()
         raise RuntimeError(f"download failed: status={r.status_code}")

@@ -1,10 +1,4 @@
-"""``LearnService`` — profile-aware 网络学堂用例。
-
-每个 ``list_xxx`` 包在 ``with_reauth(...)`` 里：SessionExpired 自动重登一次。
-写操作 ``submit_homework`` 按约定 ``safe_to_retry=False`` 保守不自动重试。
-
-返回值统一形状：``CourseScopedListing[T]``（user + semester + courses + items + warnings）。
-"""
+"""Profile-aware Web Learning use cases."""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -34,7 +28,6 @@ from .base import (
     ServiceWarning,
 )
 
-# 语义别名 — CLI 与 SDK 用户读起来更直白；底层都是同一个泛型 dataclass。
 AnnouncementListing = CourseScopedListing[Announcement]
 CourseFileListing = CourseScopedListing[CourseFile]
 DiscussionListing = CourseScopedListing[Discussion]
@@ -46,7 +39,7 @@ QuestionnaireListing = CourseScopedListing[Questionnaire]
 
 @dataclass(frozen=True)
 class CourseListing:
-    """列课程：items 就是 courses。"""
+    """Course listing where the payload is already the course list."""
     user: str
     semester: str
     courses: list[Course]
@@ -104,9 +97,8 @@ class HomeworkSubmitResult:
 
 
 class LearnService(BaseService):
-    """学生侧网络学堂应用服务。"""
+    """Student-side Web Learning service."""
 
-    # ---------------- 用户 / 课程 ----------------
     def user_info(
         self,
         user: str | None = None,
@@ -157,7 +149,6 @@ class LearnService(BaseService):
 
         return self.with_reauth(call)
 
-    # ---------------- 公告 ----------------
     def list_announcements(
         self,
         user: str | None = None,
@@ -246,7 +237,6 @@ class LearnService(BaseService):
 
         return self.with_reauth(call)
 
-    # ---------------- 课件 ----------------
     def list_files(
         self,
         user: str | None = None,
@@ -321,7 +311,6 @@ class LearnService(BaseService):
 
         return self.with_reauth(call)
 
-    # ---------------- 作业 ----------------
     def list_homeworks(
         self,
         user: str | None = None,
@@ -358,7 +347,6 @@ class LearnService(BaseService):
 
         return self.with_reauth(call)
 
-    # ---------------- 讨论 / 答疑 / 问卷 ----------------
     def list_discussions(
         self,
         user: str | None = None,
@@ -465,7 +453,6 @@ class LearnService(BaseService):
 
         return self.with_reauth(call)
 
-    # ---------------- 跨类型聚合 ----------------
     def list_contents(
         self,
         user: str | None = None,
@@ -509,7 +496,6 @@ class LearnService(BaseService):
 
         return self.with_reauth(call)
 
-    # ---------------- 下载（读） ----------------
     def download_course_file(
         self,
         user: str | None,
@@ -637,7 +623,6 @@ class LearnService(BaseService):
 
         return self.with_reauth(call)
 
-    # ---------------- 写 ----------------
     def submit_homework(
         self,
         user: str | None,
@@ -650,7 +635,7 @@ class LearnService(BaseService):
         network: AuthNetwork | None = None,
         policy: AuthPolicy | None = None,
     ) -> HomeworkSubmitResult:
-        """作业提交。保守 ``safe_to_retry=False`` — 失败由 CLI 提示用户手动重跑。"""
+        """Submit homework without automatic retry after auth loss."""
         def call(force_login: bool) -> HomeworkSubmitResult:
             selected, sso = self.ensure_sso(
                 user, interaction=interaction, network=network, policy=policy,
@@ -671,7 +656,6 @@ class LearnService(BaseService):
 
         return self.with_reauth(call, safe_to_retry=False)
 
-    # ---------------- 内部 ----------------
     def _resolve_courses(
         self,
         client: LearnClient,

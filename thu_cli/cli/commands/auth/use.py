@@ -1,4 +1,4 @@
-"""``thu auth use`` — 切换 / 创建当前 profile。"""
+"""``thu auth use`` command."""
 from __future__ import annotations
 
 import argparse
@@ -7,11 +7,12 @@ from ....config import M
 from ..._common import CommandContext
 
 NAME = "use"
-HELP = "切换当前 profile；不存在则创建"
+HELP = "CMD_AUTH_USE"
 
 
 def register(subparsers: argparse._SubParsersAction) -> None:
-    p = subparsers.add_parser(NAME, help=HELP, description=HELP)
+    help_text = getattr(M, HELP)
+    p = subparsers.add_parser(NAME, help=help_text, description=help_text)
     p.add_argument("user")
     p.set_defaults(_handler=handle)
 

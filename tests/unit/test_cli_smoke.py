@@ -13,7 +13,7 @@ def test_argparser_builds():
 
 @pytest.mark.parametrize("domain", ["auth", "learn", "info"])
 def test_domain_help_does_not_crash(domain, capsys):
-    """非空 domain 的 --help 应该正常输出。"""
+    """Non-empty domain help should render cleanly."""
     p = _build_argparser()
     with pytest.raises(SystemExit) as ex:
         p.parse_args([domain, "--help"])
@@ -23,9 +23,8 @@ def test_domain_help_does_not_crash(domain, capsys):
 
 
 def test_empty_domains_not_registered(capsys):
-    """campus / academic 当前没有命令文件 — 应**不**出现在顶层 help / 不能被调用。"""
+    """Empty domains should not appear in top-level help."""
     p = _build_argparser()
-    # 顶层 help 不显示空 domain
     with pytest.raises(SystemExit):
         p.parse_args(["--help"])
     out = capsys.readouterr().out
@@ -34,7 +33,7 @@ def test_empty_domains_not_registered(capsys):
 
 
 def test_domain_discovery_finds_all_subpackages():
-    """domain 自动发现应该枚举 cli/commands/ 下所有子包，包括空 domain。"""
+    """Discovery should include all domain packages, including empty ones."""
     discovered = _discover_domain_packages()
     assert "auth" in discovered
     assert "learn" in discovered

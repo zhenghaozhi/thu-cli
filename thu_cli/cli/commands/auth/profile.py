@@ -1,7 +1,4 @@
-"""``thu auth profile`` — 多 profile 管理。子动作：``list`` / ``add`` / ``remove``。
-
-不带子动作时等价 ``list``。
-"""
+"""``thu auth profile`` command."""
 from __future__ import annotations
 
 import argparse
@@ -10,21 +7,22 @@ from ....config import M
 from ..._common import CommandContext
 
 NAME = "profile"
-HELP = "管理本地账号 profile（list / add / remove）"
+HELP = "CMD_AUTH_PROFILE"
 
 
 def register(subparsers: argparse._SubParsersAction) -> None:
-    p = subparsers.add_parser(NAME, help=HELP, description=HELP)
+    help_text = getattr(M, HELP)
+    p = subparsers.add_parser(NAME, help=help_text, description=help_text)
     sub = p.add_subparsers(dest="profile_cmd")
-    sub.add_parser("list", help="列出 profiles")
+    sub.add_parser("list", help=M.CMD_AUTH_PROFILE_LIST)
 
-    q = sub.add_parser("add", help="新增 profile")
+    q = sub.add_parser("add", help=M.CMD_AUTH_PROFILE_ADD)
     q.add_argument("user")
     q.add_argument("--current", action="store_true", help=M.HELP_PROFILE_CURRENT)
     q.add_argument("--student-type", choices=["undergraduate", "graduate"],
                    default=None, dest="student_type", help=M.HELP_STUDENT_TYPE)
 
-    q = sub.add_parser("remove", help="删除 profile")
+    q = sub.add_parser("remove", help=M.CMD_AUTH_PROFILE_REMOVE)
     q.add_argument("user")
     q.add_argument("--delete-data", action="store_true", help=M.HELP_PROFILE_DELETE_DATA)
 
@@ -44,7 +42,7 @@ def handle(args: argparse.Namespace, ctx: CommandContext) -> int:
             try:
                 ctx.services.auth.set_student_type(user, args.student_type)
             except ValueError as e:
-                ctx.output.warning(f"student-type 未保存：{e}")
+                ctx.output.warning(M.WARN_STUDENT_TYPE_NOT_SAVED.format(detail=e))
         ctx.output.success(M.OK_PROFILE_ADDED.format(user=user))
         if ctx.services.auth.current_user() == user:
             ctx.output.hint(M.OK_PROFILE_CURRENT.format(user=user))
@@ -65,7 +63,6 @@ def handle(args: argparse.Namespace, ctx: CommandContext) -> int:
         ))
         return 0
 
-    # list
     rows = ctx.services.auth.profile_rows()
     if ctx.output.json_mode:
         ctx.output.render(rows, kind="profile_rows")

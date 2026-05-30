@@ -1,14 +1,4 @@
-"""``thu`` 命令行的根入口。
-
-布局：
-
-    thu [global flags] <domain> <command> [args]
-
-无参数 ``thu`` 进入交互式 shell。
-
-Domain 自动发现：扫描 ``cli/commands/`` 下每个子包，调它们的 ``register_root``。
-若一个 domain 没有任何命令文件，``register_root`` 返回 False，顶层 help 不显示。
-"""
+"""Root entry point for the ``thu`` command."""
 from __future__ import annotations
 
 import argparse
@@ -25,7 +15,6 @@ from ._common import CommandContext, Services
 from .output import Output, to_json, ui
 
 
-# 已知 domain 列表 — 自动扫描 ``cli/commands/`` 下的子包
 def _discover_domain_packages() -> list[str]:
     return sorted(
         info.name
@@ -35,7 +24,7 @@ def _discover_domain_packages() -> list[str]:
 
 
 def _configure_logging(*, verbose: bool = False) -> None:
-    """``THU_CLI_LOG=DEBUG`` 打开协议级 trace；默认 WARNING。"""
+    """Enable protocol-level traces with ``THU_CLI_LOG=DEBUG`` or ``-v``."""
     level_name = "DEBUG" if verbose else os.environ.get("THU_CLI_LOG", "WARNING").upper()
     level = getattr(logging, level_name, logging.WARNING)
     if not logging.getLogger().handlers:
@@ -56,7 +45,7 @@ def _build_argparser() -> argparse.ArgumentParser:
     for name in _discover_domain_packages():
         module = importlib.import_module(f"thu_cli.cli.commands.{name}")
         register_root = module.register_root
-        register_root(domain_sub)  # 空 domain 自动跳过，不污染 help
+        register_root(domain_sub)
     return ap
 
 
@@ -71,7 +60,6 @@ def dispatch(argv: list[str]) -> int:
 
     handler = getattr(args, "_handler", None)
     if handler is None:
-        # domain 被选了但没选具体命令 — 触发 ``thu <domain> --help``
         sub_parser = getattr(args, "_sub_parser", None)
         if sub_parser is not None:
             sub_parser.print_help()
@@ -98,9 +86,7 @@ def dispatch(argv: list[str]) -> int:
 
 
 def _print_thu_error(e: ThuCliError, *, json_mode: bool) -> int:
-    """统一 ThuCliError 输出。``json_mode=True`` 时往 stderr 写
-    ``{"error": {"type": ..., "message": ...}}``，否则走人类文案 + i18n。
-    """
+    """Print one top-level ``ThuCliError`` in JSON or human mode."""
     if isinstance(e, BadCredentials):
         msg = M.ERR_BAD_CREDENTIALS.format(message=e)
         rc = 2

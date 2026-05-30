@@ -1,14 +1,15 @@
-"""I18n — 文案集中表 + ``M`` 代理。
+"""CLI message catalog and the ``M`` lookup proxy.
 
-CLI 用 ``M.SOME_KEY`` 访问文案，按 ``$THU_CLI_LANG`` / ``$LANG`` 选 zh 或 en。
-所有文案集中在本文件两个 dict 里，方便统一维护、避免散落。
+CLI code reads messages through ``M.SOME_KEY``. The active catalog is selected
+from ``$THU_CLI_LANG`` / ``$LANG`` on each access so tests can switch languages
+without re-importing the module.
 """
 from __future__ import annotations
 
 import os
 
 ZH: dict[str, str] = {
-    # 程序级
+    # Program
     "APP_DESC":           "清华统一认证 / 网络学堂 / 信息门户的 Python CLI 与 SDK",
     "AUTH_DESC":          "清华统一认证",
     "LEARN_DESC":         "清华网络学堂",
@@ -17,7 +18,7 @@ ZH: dict[str, str] = {
     "ACADEMIC_DESC":      "教务（培养方案 / 考试 / 窥分）— 占位，开发中",
     "SHELL_HELP":         '输入 "help" 查看命令，输入 "exit" 退出',
 
-    # 通用
+    # Common labels
     "PROFILE":            "Profile",
     "PROFILE_KEY":        "profile",
     "LOCAL_AUTH":         "Local Auth",
@@ -79,7 +80,7 @@ ZH: dict[str, str] = {
     "GRADED":             "已批改",
     "UNKNOWN":            "<unknown>",
 
-    # info 域专用
+    # Info-specific labels
     "CALENDAR":           "教学日历",
     "TRANSCRIPT":         "历年成绩",
     "TIMETABLE":          "课程表",
@@ -98,12 +99,12 @@ ZH: dict[str, str] = {
     "CALC_GPA":           "明细计算 GPA",
     "COURSE_COUNT":       "课程数",
 
-    # info 提示
+    # Empty-state messages
     "INFO_NO_CALENDAR":   "未找到教学日历",
     "INFO_NO_TRANSCRIPT": "无成绩记录",
     "INFO_NO_TIMETABLE":  "范围内无课程 / 考试",
 
-    # 通用提示
+    # Common info messages
     "INFO_NO_PROFILES":         "暂无 profile",
     "INFO_NO_COURSES":          "未找到课程",
     "INFO_NO_ANNOUNCEMENTS":    "未找到公告",
@@ -116,7 +117,7 @@ ZH: dict[str, str] = {
     "INFO_NO_ATTACHMENTS":      "未找到可下载附件",
     "INFO_NOTHING_REMOVED":     "{user} 无可清除内容",
 
-    # 成功
+    # Success messages
     "OK_2FA_SENT":              "2FA 验证码已发送",
     "OK_LOGGED_IN":             "已登录：{user}",
     "OK_LOGGED_IN_NO_2FA":      "已登录：{user}；无需 2FA",
@@ -128,15 +129,18 @@ ZH: dict[str, str] = {
     "OK_DOWNLOADED":            "已下载：{path}",
     "OK_HOMEWORK_SUBMITTED":    "作业已提交：{id}",
 
-    # 警告
+    # Warning messages
     "WARN_SESSION_EXPIRED":     "{user} 的 session 已过期",
     "WARN_PROFILE_NOT_FOUND":   "Profile 不存在：{user}",
     "WARN_CAPTCHA_SAVED":       "图形验证码已保存：{path}",
+    "WARN_STUDENT_TYPE_NOT_SAVED": "student-type 未保存：{detail}",
 
-    # 错误
+    # Error messages
     "ERR_INTERRUPTED":          "已中断",
     "ERR_NO_CURRENT_PROFILE":   "未设置当前 profile",
     "ERR_INVALID_PROFILE":      "无效 profile：{detail}",
+    "ERR_MISSING_USER":         "缺学号：请设置 THU_USER、用 --user 指定、先 `thu auth use <id>`，或在交互式终端运行",
+    "ERR_MISSING_PASSWORD":     "缺密码：请设置 THU_PASS 或在交互式终端运行",
     "ERR_BAD_CREDENTIALS":      "账号或密码不正确：{message}",
     "ERR_2FA_FAILED":           "2FA 验证失败：{message}",
     "ERR_CAPTCHA_REQUIRED":     "需要图形验证码但未提供：{message}",
@@ -154,7 +158,7 @@ ZH: dict[str, str] = {
     "ERR_CONTENT_SOURCE_CONFLICT":        "--content 和 --content-file 不能同时使用",
     "ERR_DATE_FORMAT":          "{field} 需要 YYYY-MM-DD 格式：{value}",
 
-    # 提示
+    # Hints
     "HINT_USE_PROFILE":         "运行：thu auth use <id>",
     "HINT_USE_OR_LOGIN":        "运行：thu auth use <id> 或 thu auth login --user <id>",
     "HINT_LOGIN":               "运行：thu auth login --user {user}",
@@ -165,15 +169,44 @@ ZH: dict[str, str] = {
     "HINT_PROFILE_ADD":         "运行：thu auth profile add <id> --current",
     "HINT_DEVICE_KEPT":         "device 已保留；如需删除请运行 `thu auth logout --all`",
 
-    # 交互
+    # Prompts
     "PROMPT_USER":              "学号",
     "PROMPT_PASSWORD":          "密码",
     "PROMPT_2FA_CHOICE":        "选择 1-{count}",
+    "PROMPT_2FA_CODE_WECHAT":   "企业微信验证码",
+    "PROMPT_2FA_CODE_MOBILE":   "短信验证码",
+    "PROMPT_2FA_CODE_TOTP":     "TOTP 6 位数",
+    "METHOD_2FA_WECHAT":        "企业微信",
+    "METHOD_2FA_MOBILE":        "手机短信 {phone}",
+    "METHOD_2FA_TOTP":          "TOTP 动态口令",
     "PROMPT_TRUST_DEVICE":      "是否信任本浏览器/设备以便后续登录？",
     "PROMPT_CAPTCHA":           "图形验证码",
     "PROMPT_CONFIRM_HOMEWORK_SUBMIT": "确认提交作业 {id}？",
 
-    # --help 文案
+    # Command descriptions
+    "CMD_AUTH_LOGIN":           "登录并预热当前支持的服务（learn / info portal / transcript / timetable）",
+    "CMD_AUTH_LOGOUT":          "删除 session（默认保留 device.json）",
+    "CMD_AUTH_PROFILE":         "管理本地账号 profile（list / add / remove）",
+    "CMD_AUTH_PROFILE_LIST":    "列出 profiles",
+    "CMD_AUTH_PROFILE_ADD":     "新增 profile",
+    "CMD_AUTH_PROFILE_REMOVE":  "删除 profile",
+    "CMD_AUTH_STATUS":          "显示本地认证状态并默认远程验证",
+    "CMD_AUTH_USE":             "切换当前 profile；不存在则创建",
+    "CMD_AUTH_VERIFY":          "ping learn API 检查 session 是否仍有效",
+    "CMD_AUTH_WHOAMI":          "显示当前 profile",
+    "CMD_INFO_CALENDAR":        "本学期教学日历（首日 + 教学周数）",
+    "CMD_INFO_TIMETABLE":       "课程表 / 考试日历",
+    "CMD_INFO_TRANSCRIPT":      "历年成绩单 + 官方/明细 GPA",
+    "CMD_LEARN_ANNOUNCEMENT":   "列公告（默认本学期），给定 ID 时显示详情或下载附件",
+    "CMD_LEARN_COURSE":         "列课程，默认本学期",
+    "CMD_LEARN_DISCUSSION":     "列课程讨论，默认本学期",
+    "CMD_LEARN_FILE":           "列课件（默认本学期），给定 ID 时下载",
+    "CMD_LEARN_HOMEWORK":       "列作业（默认本学期），给定 ID 时显示详情；--submit / --download 操作",
+    "CMD_LEARN_ME":             "显示网络学堂用户信息（姓名 + 院系）",
+    "CMD_LEARN_QUESTION":       "列课程答疑，默认本学期",
+    "CMD_LEARN_QUESTIONNAIRE":  "列课程问卷 / 投票 / 表单",
+
+    # --help text
     "HELP_INSECURE":            "关闭 TLS 证书校验（用于校园网抓包 / proxy MITM；默认校验）",
     "HELP_NO_ENV_PROXY":        "忽略 HTTP(S)_PROXY 环境变量",
     "HELP_VERBOSE":             "开启 debug logging（等价 THU_CLI_LOG=DEBUG）",
@@ -338,10 +371,13 @@ EN: dict[str, str] = {
     "WARN_SESSION_EXPIRED":     "session for {user} expired",
     "WARN_PROFILE_NOT_FOUND":   "profile not found: {user}",
     "WARN_CAPTCHA_SAVED":       "captcha image saved: {path}",
+    "WARN_STUDENT_TYPE_NOT_SAVED": "student-type not saved: {detail}",
 
     "ERR_INTERRUPTED":          "interrupted",
     "ERR_NO_CURRENT_PROFILE":   "no current profile",
     "ERR_INVALID_PROFILE":      "invalid profile: {detail}",
+    "ERR_MISSING_USER":         "missing student id: set THU_USER, pass --user, run `thu auth use <id>`, or use an interactive terminal",
+    "ERR_MISSING_PASSWORD":     "missing password: set THU_PASS or use an interactive terminal",
     "ERR_BAD_CREDENTIALS":      "wrong username or password: {message}",
     "ERR_2FA_FAILED":           "2FA verification failed: {message}",
     "ERR_CAPTCHA_REQUIRED":     "captcha required but not provided: {message}",
@@ -372,9 +408,37 @@ EN: dict[str, str] = {
     "PROMPT_USER":              "student id",
     "PROMPT_PASSWORD":          "password",
     "PROMPT_2FA_CHOICE":        "choose 1-{count}",
+    "PROMPT_2FA_CODE_WECHAT":   "WeCom verification code",
+    "PROMPT_2FA_CODE_MOBILE":   "SMS verification code",
+    "PROMPT_2FA_CODE_TOTP":     "TOTP 6-digit code",
+    "METHOD_2FA_WECHAT":        "WeCom",
+    "METHOD_2FA_MOBILE":        "SMS {phone}",
+    "METHOD_2FA_TOTP":          "TOTP",
     "PROMPT_TRUST_DEVICE":      "trust this device for future logins?",
     "PROMPT_CAPTCHA":           "captcha",
     "PROMPT_CONFIRM_HOMEWORK_SUBMIT": "confirm submitting homework {id}?",
+
+    "CMD_AUTH_LOGIN":           "log in and warm up supported services (learn / info portal / transcript / timetable)",
+    "CMD_AUTH_LOGOUT":          "remove session (keeps device.json by default)",
+    "CMD_AUTH_PROFILE":         "manage local account profiles (list / add / remove)",
+    "CMD_AUTH_PROFILE_LIST":    "list profiles",
+    "CMD_AUTH_PROFILE_ADD":     "add profile",
+    "CMD_AUTH_PROFILE_REMOVE":  "remove profile",
+    "CMD_AUTH_STATUS":          "show local auth status and verify remote services by default",
+    "CMD_AUTH_USE":             "switch current profile; create it if missing",
+    "CMD_AUTH_VERIFY":          "ping the learn API to check whether the session is valid",
+    "CMD_AUTH_WHOAMI":          "show current profile",
+    "CMD_INFO_CALENDAR":        "current semester calendar (first day + week count)",
+    "CMD_INFO_TIMETABLE":       "timetable / exam calendar",
+    "CMD_INFO_TRANSCRIPT":      "historical transcript + official/detail GPA",
+    "CMD_LEARN_ANNOUNCEMENT":   "list announcements; with ID, show detail or download attachments",
+    "CMD_LEARN_COURSE":         "list courses, current semester by default",
+    "CMD_LEARN_DISCUSSION":     "list course discussions, current semester by default",
+    "CMD_LEARN_FILE":           "list course files; with ID, download",
+    "CMD_LEARN_HOMEWORK":       "list homework; with ID, show detail; --submit / --download operate",
+    "CMD_LEARN_ME":             "show Web Learning user info (name + department)",
+    "CMD_LEARN_QUESTION":       "list answered course questions, current semester by default",
+    "CMD_LEARN_QUESTIONNAIRE":  "list course questionnaires / votes / forms",
 
     "HELP_INSECURE":            "disable TLS cert verification (for campus net / proxy MITM; default verify)",
     "HELP_NO_ENV_PROXY":        "ignore HTTP(S)_PROXY environment vars",
@@ -424,18 +488,17 @@ EN: dict[str, str] = {
 
 
 def _select() -> dict[str, str]:
-    """每次访问按当前环境变量选 catalog —— 让测试覆盖 ``$THU_CLI_LANG`` 即时生效。"""
+    """Select the active catalog on every access."""
     lang = os.environ.get("THU_CLI_LANG") or os.environ.get("LANG") or ""
     return EN if lang.lower().startswith("en") else ZH
 
 
 class _MessageProxy:
-    """``M.SOME_KEY`` 按当前 lang 返回字符串。未定义的 key 抛 ``AttributeError``。"""
+    """Resolve ``M.SOME_KEY`` against the active message catalog."""
 
     def __getattr__(self, name: str) -> str:
         catalog = _select()
         if name not in catalog:
-            # 不存在 key — 用 ZH 兜底防止误打错；KeyError 时再抛 AttributeError 让测试发现
             if name in ZH:
                 return ZH[name]
             raise AttributeError(f"unknown message key: {name!r}")

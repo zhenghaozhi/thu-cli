@@ -1,7 +1,4 @@
-"""跨服务共享的应用层基础设施：``BaseService`` + ``Listing[T]`` + ``with_reauth``。
-
-依赖方向：``services`` → ``sdk`` + ``config``；不反向。具体 service 继承 ``BaseService``。
-"""
+"""Shared service infrastructure."""
 from __future__ import annotations
 
 from collections.abc import Callable
@@ -28,22 +25,14 @@ E = TypeVar("E")
 
 @dataclass(frozen=True)
 class ServiceWarning:
-    """跨服务通用 warning。
-
-    ``context`` 是失败上下文标识（learn 通常是 course_id；info/sports 可以是各自实体 id）；
-    ``message`` 是给人看的描述。
-    """
+    """Warning collected while fetching one item in a fanout."""
     context: str
     message: str
 
 
 @dataclass(frozen=True)
 class Listing(Generic[T]):
-    """通用 listing：``user`` + ``items`` + ``warnings`` 三段。
-
-    info / sports / cloud / git 这些无 "学期+课程" 概念的服务用这个；learn 用更
-    具体的 ``CourseScopedListing[T]``。
-    """
+    """Generic listing shape for services without course scope."""
     user: str
     items: list[T]
     warnings: list[ServiceWarning] = field(default_factory=list)
@@ -51,14 +40,10 @@ class Listing(Generic[T]):
 
 @dataclass(frozen=True)
 class CourseScopedListing(Generic[T]):
-    """learn 专属 listing：在 ``user/items/warnings`` 之上额外带 ``semester`` / ``courses``。
-
-    用**组合**而不是继承自 ``Listing[T]`` — 通用 Listing 不应该被 learn 语义污染。
-    需要把它当 ``Listing[T]`` 用时调 ``as_listing()``。
-    """
+    """Listing shape for Web Learning data scoped by semester and course."""
     user: str
     semester: str
-    courses: list  # list[Course]；避免在 base 引入 learn 类型
+    courses: list
     items: list[T]
     warnings: list[ServiceWarning] = field(default_factory=list)
 
@@ -69,7 +54,7 @@ class CourseScopedListing(Generic[T]):
         return {course.id: course for course in self.courses}
 
     def by_course(self) -> dict[str, list[T]]:
-        """按 ``course_id`` 把 items 分桶；要求每个 item 有 ``course_id`` 属性。"""
+        """Group items by their ``course_id`` attribute."""
         grouped: dict[str, list[T]] = {course.id: [] for course in self.courses}
         for item in self.items:
             grouped.setdefault(getattr(item, "course_id", ""), []).append(item)
@@ -77,12 +62,8 @@ class CourseScopedListing(Generic[T]):
 
 
 class BaseService:
-    """所有 profile-aware service 共用的认证 / 并发 / 重试基础设施。
+    """Authentication, retry, and fanout helpers for profile-aware services."""
 
-    具体 service 继承本类并直接用 ``ensure_sso`` / ``with_reauth`` / ``fanout_parallel``。
-    """
-
-    # ---------------- 路径 ----------------
     def captcha_path(self, user: str | None = None) -> Path:
         selected = self._resolve_user(user)
         return profiles.profile_paths(selected).captcha
@@ -97,7 +78,6 @@ class BaseService:
             raise AuthError("no current profile")
         return resolved
 
-    # ---------------- 认证（headless friendly） ----------------
     def ensure_sso(
         self,
         user: str | None = None,
@@ -108,11 +88,7 @@ class BaseService:
         policy: AuthPolicy | None = None,
         force_login: bool = False,
     ) -> tuple[str, SsoSession]:
-        """解析 profile 路径，load 缓存 session，按需 bootstrap requested realms。
-
-        实现 SDK 用户可绕过本方法：直接 ``SsoSession(...)`` + ``ensure_realm(...)`` 即可。
-        本方法仅是 CLI 用的便利层（profile + path resolution）。
-        """
+        """Resolve profile paths, load cached session, and bootstrap realms."""
         selected = self._resolve_user(user)
         profiles.add_profile(selected, make_current=False)
         paths = profiles.profile_paths(selected)
@@ -158,27 +134,17 @@ class BaseService:
         interaction: AuthInteraction | None = None,
         policy: AuthPolicy | None = None,
     ) -> None:
-        """Bootstrap 一个 CampusApp 并持久化 cookies + 时间戳。"""
+        """Bootstrap one CampusApp and persist cookies/timestamps."""
         sso.ensure_app(app, interaction=interaction, policy=policy)
         sso.save(profiles.profile_paths(selected).session)
 
-    # ---------------- 重试 ----------------
     def with_reauth(
         self,
         call: Callable[[bool], T],
         *,
         safe_to_retry: bool = True,
     ) -> T:
-        """先 ``call(False)``；遇 ``SessionExpired`` 则 ``call(True)`` 重跑一次。
-
-        - 读操作：默认 ``safe_to_retry=True``（什么都不传），自动重登重试。
-        - 写操作：调用方应自己判断。如果 SDK 保证 ``SessionExpired`` 只会在副作用 POST
-          之前抛（thu-cli 目前所有 sdk.learn 写路径都满足），传 True 安全；如果存在
-          "请求已发出但响应解析失败" 的可能，必须 ``safe_to_retry=False``。
-
-        ``call(force_login)`` 应自己组装 ``AuthPolicy(force_login=...)`` 或透传给
-        ``ensure_sso(force_login=...)``。
-        """
+        """Run once, reauth on ``SessionExpired``, then retry when safe."""
         try:
             return call(False)
         except SessionExpired:
@@ -186,7 +152,6 @@ class BaseService:
                 raise
             return call(True)
 
-    # ---------------- 跨实体 fanout（默认串行） ----------------
     def fanout_parallel(
         self,
         entities: list[E],
@@ -197,22 +162,14 @@ class BaseService:
         allow_failure: bool = True,
         max_workers: int = 1,
     ) -> tuple[list[T], list[ServiceWarning]]:
-        """对 entities 跑 fetch；单元素失败收成 ``ServiceWarning``。
-
-        **默认串行（``max_workers=1``）**。``requests.Session`` 不是 fully thread-safe
-        （cookies / headers / redirect cache 是共享可变状态），跨课程共享同一个
-        ``SsoSession.http`` 在 ``max_workers>1`` 下可能出现偶发竞态。调用方可以显式
-        传 ``max_workers=N`` 来 opt-in 并发，前提是自己已确认或不在乎这个风险。
-
-        ``SessionExpired`` 不计入 warning，直接透传 — 上层 ``with_reauth`` 负责重试。
-        """
+        """Fetch each entity, collecting per-entity failures as warnings."""
         if not entities:
             return [], []
         worker_count = max(1, min(max_workers, len(entities)))
         items: list[T] = []
         warnings: list[ServiceWarning] = []
         if worker_count == 1:
-            # 串行路径：跳过 ThreadPoolExecutor，避免每条命令都付线程开销
+            # Avoid thread overhead for the default serial path.
             for entity in entities:
                 try:
                     items.extend(fetch(entity))

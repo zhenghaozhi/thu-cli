@@ -1,36 +1,24 @@
-"""集中管理所有 HTTP endpoint。
-
-按 domain section 分块。所有 SDK / service 模块都应该从这里导入 URL，不要在各自
-文件里硬写。新加接口的 URL 也加在这里。
-
-外部 SDK 用户拷代码时**至少**带走本文件。
-"""
+"""Centralized HTTP endpoint definitions."""
 from __future__ import annotations
 
 from .webvpn import webvpn_url
 
-# ============================================================================
-# id.tsinghua — 统一身份认证
-# ============================================================================
 ID_BASE = "https://id.tsinghua.edu.cn"
 
 SSO_FORM_PREFIX = f"{ID_BASE}/do/off/ui/auth/login/form/"
 SSO_CHECK = f"{ID_BASE}/do/off/ui/auth/login/check"
 SSO_CAPTCHA_IMG = f"{ID_BASE}/captcha.jpg"
-DA_LOGIN = f"{ID_BASE}/b/doubleAuth/login"          # 二次认证（FIND_APPROACHES / SEND_CODE / VERITY_CODE）
+DA_LOGIN = f"{ID_BASE}/b/doubleAuth/login"
 DA_SAVE_FINGER = f"{ID_BASE}/b/doubleAuth/personal/saveFinger"
 
 
 def sso_form_url(app_id: str, slot: int = 0) -> str:
-    """id.tsinghua 上某个 APP_ID 的登录表单页。"""
+    """Return the id.tsinghua login form URL for an APP_ID."""
     return f"{SSO_FORM_PREFIX}{app_id}/{slot}"
 
 
-# ============================================================================
-# learn.tsinghua — 网络学堂
-# ============================================================================
 LEARN_BASE = "https://learn.tsinghua.edu.cn"
-LEARN_DOMAIN = "learn.tsinghua.edu.cn"  # csrf_params() 用
+LEARN_DOMAIN = "learn.tsinghua.edu.cn"
 
 LEARN_HOMEPAGE = f"{LEARN_BASE}/f/wlxt/index/course/student/"
 LEARN_SEMESTER = f"{LEARN_BASE}/b/kc/zhjw_v_code_xnxq/getCurrentAndNextSemester"
@@ -79,13 +67,13 @@ def learn_course_files_by_category_url(course_id: str, category_id: str) -> str:
 
 
 def learn_announcement_view_url(course_id: str, announcement_id: str) -> str:
-    """公告 HTML 详情页。注意：访问可能将公告标记为已读。"""
+    """Return the announcement HTML detail page URL."""
     return (f"{LEARN_BASE}/f/wlxt/kcgg/wlkc_ggb/student/beforeViewXs"
             f"?wlkcid={course_id}&id={announcement_id}")
 
 
 def learn_preview_url(file_id: str, *, module: str = "mk_kcgg") -> str:
-    """通用预览页；mk 取值随模块变化：公告附件 ``mk_kcgg`` / 课件 ``mk_kcwj`` / 作业 ``mk_kczy``。"""
+    """Return the shared preview page URL for a remote file."""
     return (f"{LEARN_BASE}/f/wlxt/kc/wj_wjb/student/beforePlay"
             f"?wjid={file_id}&mk={module}&browser=-1&sfgk=0&pageType=all")
 
@@ -124,13 +112,8 @@ def learn_questionnaire_url(course_id: str, questionnaire_id: str, questionnaire
             f"?wlkcid={course_id}&wjid={questionnaire_id}&wjlx={questionnaire_type}&jswj=no")
 
 
-# ============================================================================
-# info portal（webvpn realm 内）
-# ============================================================================
-# 我们 target ``info.tsinghua.edu.cn`` 而非 thu-info-lib 硬编的 ``info2021``：
-#   - id.tsinghua 的 INFO_PORTAL APP_ID redirect_uri 落到 info.tsinghua，bootstrap 在这里拿 cookie
-#   - 经验证 wengine-vpn/cookie?host=info.tsinghua 返回有效 XSRF-TOKEN；host=info2021 会被
-#     onlineAppRedirect 以 "用户未登录" 拒绝
+# Target ``info.tsinghua.edu.cn`` because the INFO_PORTAL APP_ID redirects
+# there, and its cookie bridge returns a usable XSRF token.
 INFO_ROAMING_URL = webvpn_url(
     "info.tsinghua.edu.cn",
     "/b/yyfw/vyyfwxx/info/portal_fg/common/onlineAppRedirect",
@@ -143,16 +126,12 @@ INFO_USER_DATA_URL = webvpn_url(
     "info.tsinghua.edu.cn",
     "/b/info/gxfw_fg/common/grjbxx",
 )
-# 特殊：webvpn 的 cookie-bridge endpoint。返回内网 host 的 cookie 作为纯字符串。
-# 我们从中 grep XSRF-TOKEN 作为 info portal 的 csrf。
+# The webvpn cookie bridge returns inner-host cookies as plain text.
 INFO_CSRF_COOKIE_URL = (
     "https://webvpn.tsinghua.edu.cn/wengine-vpn/cookie?method=get"
     "&host=info.tsinghua.edu.cn&scheme=https&path=/f/info/gxfw_fg/common/index"
 )
 
-# ============================================================================
-# zhjw — 教务（成绩单 / 课程表）。zhjw 只走 HTTP，所以 scheme="http"。
-# ============================================================================
 ZHJW_TRANSCRIPT_BKS_URL = webvpn_url(
     "zhjw.cic.tsinghua.edu.cn",
     "/cj.cjCjbAll.do?m=bks_cjdcx&cjdlx=zw",
@@ -164,7 +143,7 @@ ZHJW_TRANSCRIPT_YJS_URL = webvpn_url(
     scheme="http",
 )
 
-# 课程表是 JSONP；URL 拼成 ``<prefix><start>&p_end_date=<end>&jsoncallback=m``
+# Timetable responses are JSONP.
 ZHJW_TIMETABLE_BKS_PREFIX = webvpn_url(
     "zhjw.cic.tsinghua.edu.cn",
     "/jxmh_out.do?m=bks_jxrl_all&p_start_date=",

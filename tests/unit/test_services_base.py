@@ -1,4 +1,4 @@
-"""``services.learn`` 单元测试（with monkeypatched LearnClient）。"""
+"""Unit tests for service base helpers."""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -57,8 +57,6 @@ def test_course_scoped_listing_as_listing():
     assert plain.items == [1, 2]
     assert plain.warnings[0].context == "x"
 
-
-# ---------------- with_reauth ----------------
 def test_with_reauth_no_retry_on_success():
     from thu_cli.services.base import BaseService
     base = BaseService()
@@ -100,8 +98,6 @@ def test_with_reauth_safe_to_retry_false_does_not_retry():
         base.with_reauth(call, safe_to_retry=False)
     assert calls == [False]
 
-
-# ---------------- fanout_parallel ----------------
 def test_fanout_parallel_collects_results():
     from thu_cli.services.base import BaseService
     base = BaseService()

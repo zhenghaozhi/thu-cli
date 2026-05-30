@@ -1,4 +1,4 @@
-"""``thu learn me`` — 显示网络学堂用户信息。"""
+"""``thu learn me`` command."""
 from __future__ import annotations
 
 import argparse
@@ -8,11 +8,12 @@ from ..._common import CommandContext, add_network_flags
 from ...output import register_renderer
 
 NAME = "me"
-HELP = "显示网络学堂用户信息（姓名 + 院系）"
+HELP = "CMD_LEARN_ME"
 
 
 def register(subparsers: argparse._SubParsersAction) -> None:
-    p = subparsers.add_parser(NAME, help=HELP, description=HELP)
+    help_text = getattr(M, HELP)
+    p = subparsers.add_parser(NAME, help=help_text, description=help_text)
     add_network_flags(p)
     p.add_argument("--user", help=M.HELP_USER)
     p.set_defaults(_handler=handle)

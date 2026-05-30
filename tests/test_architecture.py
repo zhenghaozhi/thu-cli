@@ -31,7 +31,7 @@ PKG_ROOT = Path(thu_cli.__file__).parent
 
 
 def _all_modules(package_name: str) -> list[str]:
-    """所有 ``package_name`` 包下的 module fully-qualified names。"""
+    """Return fully-qualified module names under ``package_name``."""
     package = importlib.import_module(package_name)
     out = [package_name]
     for info in pkgutil.walk_packages(package.__path__, prefix=package_name + "."):
@@ -40,7 +40,7 @@ def _all_modules(package_name: str) -> list[str]:
 
 
 def _imports_of(module_name: str) -> set[str]:
-    """parse ``module_name``，返回所有 ``from X import Y`` / ``import X`` 中的 X 顶级路径。"""
+    """Parse imports in ``module_name`` and return imported module names."""
     module = importlib.import_module(module_name)
     if not hasattr(module, "__file__") or module.__file__ is None:
         return set()
@@ -57,10 +57,7 @@ def _imports_of(module_name: str) -> set[str]:
                 if node.module:
                     imports.add(node.module)
             else:
-                # 相对 import：用 module 自身的 package 路径解析
                 parts = pkg_root.split(".")
-                # node.level 是 leading-dot 数。如 from ...config import M from
-                # thu_cli.cli.commands.auth.login → level=4 → go up 3 → thu_cli
                 base = parts[: -(node.level - 1)] if node.level > 1 else parts
                 resolved = ".".join(base + ([node.module] if node.module else []))
                 imports.add(resolved)
@@ -74,10 +71,6 @@ def _has_forbidden_import(module_name: str, forbidden_prefixes: tuple[str, ...])
                 return imp
     return None
 
-
-# ============================================================================
-# Layer tests
-# ============================================================================
 def test_core_does_not_depend_on_higher_layers():
     forbidden = ("thu_cli.sdk", "thu_cli.services", "thu_cli.config", "thu_cli.cli")
     for module in _all_modules("thu_cli.core"):
@@ -86,10 +79,7 @@ def test_core_does_not_depend_on_higher_layers():
 
 
 def test_sdk_does_not_depend_on_services_config_cli():
-    """sdk 层是 SDK 用户的最小子集；不允许依赖 services/config/cli。
-
-    这一条是 "热插拔" 承诺的关键：拷走 ``core/`` + ``sdk/`` 就能独立跑。
-    """
+    """The SDK extraction subset must not depend on upper layers."""
     forbidden = ("thu_cli.services", "thu_cli.config", "thu_cli.cli")
     for module in _all_modules("thu_cli.sdk"):
         bad = _has_forbidden_import(module, forbidden)
@@ -107,18 +97,14 @@ def test_services_does_not_depend_on_cli():
 
 
 def test_config_does_not_depend_on_sdk_services_cli():
-    """config 是叶子层（只供 cli / services 用）；不能反过来依赖它们。"""
+    """Config must stay independent from SDK, services, and CLI."""
     forbidden = ("thu_cli.sdk", "thu_cli.services", "thu_cli.cli")
     for module in _all_modules("thu_cli.config"):
         bad = _has_forbidden_import(module, forbidden)
         assert bad is None, f"{module} imports {bad!r}; config must not depend on higher layers"
 
-
-# ============================================================================
-# CLI command file 协议
-# ============================================================================
 def _command_modules() -> list[str]:
-    """所有 cli/commands/<domain>/<cmd>.py（不含 __init__ / _xxx）。"""
+    """Return CLI command modules, excluding package and private modules."""
     out = []
     for domain_dir in (PKG_ROOT / "cli" / "commands").iterdir():
         if not domain_dir.is_dir():
@@ -134,7 +120,7 @@ def _command_modules() -> list[str]:
 
 @pytest.mark.parametrize("module_name", _command_modules())
 def test_command_file_exposes_register_and_handle(module_name: str):
-    """每个命令文件必须 expose ``NAME``, ``HELP``, ``register``, ``handle``。"""
+    """Every command file must expose the command protocol symbols."""
     module = importlib.import_module(module_name)
     for attr in ("NAME", "HELP", "register", "handle"):
         assert hasattr(module, attr), f"{module_name} missing {attr!r}"
@@ -143,13 +129,9 @@ def test_command_file_exposes_register_and_handle(module_name: str):
     assert callable(module.register), f"{module_name}.register must be callable"
     assert callable(module.handle), f"{module_name}.handle must be callable"
 
-
-# ============================================================================
-# 命令文件不应自己构造 AuthInteraction（必须走 cli.prompts）
-# ============================================================================
 @pytest.mark.parametrize("module_name", _command_modules())
 def test_command_file_does_not_build_auth_interaction(module_name: str):
-    """避免每个命令文件重复 14-kwarg fanout：必须通过 ``cli.prompts.build_interaction``。"""
+    """Command modules must use centralized auth callback construction."""
     module = importlib.import_module(module_name)
     if not hasattr(module, "__file__") or module.__file__ is None:
         return

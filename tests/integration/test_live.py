@@ -7,9 +7,8 @@ Run manually:
     THU_RUN_INTEGRATION=1 THU_USER=2023012168 THU_PASS=... \\
       .venv/bin/pytest tests/integration -x -v
 
-Each test goes through the real ``LearnService`` / ``InfoService``. **2FA** will
-be prompted interactively (企业微信 / 手机短信 / TOTP). Tests are kept tiny to
-minimise 2FA frequency.
+Each test goes through the real ``LearnService`` / ``InfoService``. **2FA** may
+prompt interactively. Tests are kept tiny to minimise 2FA frequency.
 """
 from __future__ import annotations
 
@@ -36,7 +35,7 @@ def test_learn_me():
     print(f"  name: {result.info.name}")
     print(f"  dept: {result.info.department}")
     assert result.user == _USER
-    assert result.info.name  # 至少有姓名
+    assert result.info.name
 
 
 @requires_live

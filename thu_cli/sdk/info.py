@@ -1,16 +1,8 @@
-"""信息门户 + zhjw（教务）HTTP 客户端。
+"""HTTP client for the info portal and zhjw services.
 
-公开接口：
-
-    InfoClient(sso)                                     包装 ``SsoSession`` 调 info API
-    InfoClient.get_calendar()                           本学期首日 + 教学周数
-    InfoClient.get_transcript(graduate=...)             历年成绩单（仅 courses）
-    InfoClient.get_transcript_detail(graduate=...)      历年成绩单 + GPA 汇总
-    InfoClient.get_timetable(start_date, end_date, ...) 课程表 + 考试日历
-    InfoClient.get_csrf()                               info portal XSRF 低层 helper
-
-客户端假设 ``sso`` 已 bootstrap 了对应 CampusApp（INFO_PORTAL / TRANSCRIPT_* / TIMETABLE_*）。
-service 层（services/info.py）负责 bootstrap + SessionExpired 自动重试。
+``InfoClient`` assumes the caller has bootstrapped the required CampusApp
+(``INFO_PORTAL``, ``TRANSCRIPT_*``, or ``TIMETABLE_*``). The service layer owns
+bootstrap and SessionExpired retry policy.
 """
 from __future__ import annotations
 
@@ -33,38 +25,40 @@ from ..core.endpoints import (
     ZHJW_TRANSCRIPT_YJS_URL,
 )
 from ..core.errors import SessionExpired
+from ._literals import (
+    INFO_AVERAGE_GPA_PREFIX,
+    INFO_LOGIN_FORM_MARKER,
+    INFO_NON_GPA_GRADES,
+    INFO_TOTAL_CREDIT_LABEL,
+)
 from .auth import SsoSession
 from .transport import json_or_expired
 
 logger = logging.getLogger("thu_cli.sdk.info")
 
-
-# ============================================================================
-# 数据对象
-# ============================================================================
 @dataclass(frozen=True)
 class Calendar:
-    """本学期教学日历。"""
-    first_day: str       # YYYY-MM-DD，week 1 的周一
-    semester_id: str     # 例如 "2025-2026-1"，后缀 "1"=秋 / "2"=春 / "3"=夏
-    week_count: int      # 秋 / 春 通常 18；夏 12
+    """Current-semester academic calendar."""
+    first_day: str
+    semester_id: str
+    week_count: int
 
 
 @dataclass(frozen=True)
 class TranscriptCourse:
-    """zhjw 成绩表的一行。"""
-    course_code: str  # 课程号（BKS col 0；YJS col 0 可能空）
+    """One row from a zhjw transcript table."""
+    course_code: str
     name: str
     credit: float
-    grade: str        # "A+" / "B" / "P" / "95" / "F" / ...
-    point: float      # GPA point
-    semester: str     # 例如 "2025-2026-1"
-    raw: list[str]    # 原行各 cell（debug / 扩展字段）
+    grade: str
+    point: float
+    semester: str
+    raw: list[str]
 
 
 @dataclass(frozen=True)
 class TranscriptSummary:
-    """成绩单汇总（服务端给的 + 本地交叉计算的）。"""
+    """Transcript summary from the server plus local cross-checks."""
     official_gpa: float | None
     official_total_credit: float | None
     calculated_gpa: float | None
@@ -76,28 +70,24 @@ class TranscriptSummary:
 
 @dataclass(frozen=True)
 class Transcript:
-    """完整成绩单：每行 + 汇总。"""
+    """Full transcript: course rows and summary."""
     courses: list[TranscriptCourse]
     summary: TranscriptSummary
 
 
 @dataclass(frozen=True)
 class TimetableEvent:
-    """zhjw 教学日历的一项（上课 / 实验 / 考试 / ...）。"""
-    title: str          # nr  课程名 / 考试名
-    date: str           # nq  YYYY-MM-DD
-    begin: str          # kssj HH:MM
-    end: str            # jssj HH:MM
-    location: str       # dd
-    kind: str           # fl  "上课" / "实验" / "考试" / ...
+    """One event from the zhjw timetable feed."""
+    title: str
+    date: str
+    begin: str
+    end: str
+    location: str
+    kind: str
     raw: dict[str, Any]
 
-
-# ============================================================================
-# 内部 helper
-# ============================================================================
 def _get_info_csrf(http) -> str:
-    """通过 webvpn cookie-bridge endpoint 拿 info portal 的 XSRF token。"""
+    """Fetch the info portal XSRF token through the webvpn cookie bridge."""
     r = http.get(INFO_CSRF_COOKIE_URL, timeout=30)
     m = re.search(r"XSRF-TOKEN=([^;]+);", r.text + ";")
     if not m:
@@ -135,10 +125,10 @@ def _extract_transcript_summary(
             value = cells[idx + 1].strip()
             if not label or not value:
                 continue
-            if label == "总学分" and official_total_credit is None:
+            if label == INFO_TOTAL_CREDIT_LABEL and official_total_credit is None:
                 raw[label] = value
                 official_total_credit = _parse_float(value)
-            if label.startswith("平均学分绩") and official_gpa is None:
+            if label.startswith(INFO_AVERAGE_GPA_PREFIX) and official_gpa is None:
                 raw[label] = value
                 official_gpa = _parse_float(value)
     return official_gpa, official_total_credit, raw
@@ -148,21 +138,11 @@ def _is_gpa_course(course: TranscriptCourse, point_text: str) -> bool:
     if course.credit <= 0 or not point_text.strip():
         return False
     grade = course.grade.strip().upper()
-    non_gpa_grades = {"P", "NP", "W", "I", "EX", "通过", "合格", "不合格", "免修"}
+    non_gpa_grades = {"P", "NP", "W", "I", "EX", *INFO_NON_GPA_GRADES}
     return grade not in non_gpa_grades
 
-
-# ============================================================================
-# 主类
-# ============================================================================
 class InfoClient:
-    """信息门户 + zhjw 客户端。
-
-    调用方需保证已 bootstrap 对应 CampusApp：
-        get_calendar()    → INFO_PORTAL
-        get_transcript()  → TRANSCRIPT_BKS 或 TRANSCRIPT_YJS
-        get_timetable()   → TIMETABLE_BKS 或 TIMETABLE_YJS
-    """
+    """Info portal and zhjw client."""
 
     def __init__(self, sso: SsoSession) -> None:
         self.sso = sso
@@ -172,10 +152,9 @@ class InfoClient:
         return self.sso.http
 
     def get_csrf(self) -> str:
-        """暴露 info portal 的 csrf token（自定义 API 调用可用）。"""
+        """Expose the info portal CSRF token for custom API calls."""
         return _get_info_csrf(self.http)
 
-    # ---------------- calendar ----------------
     def get_calendar(self) -> Calendar:
         csrf = _get_info_csrf(self.http)
         r = self.http.get(f"{INFO_CALENDAR_URL}?_csrf={csrf}", timeout=30)
@@ -183,7 +162,7 @@ class InfoClient:
         payload = json_or_expired(r)
         obj = (payload or {}).get("object") or {}
         first_day = str(obj.get("jyzdyt") or "")
-        # 已知 thu-info-lib 历史 quirk：2023-06-27 应为 2023-06-26（周二开学）
+        # Historical thu-info-lib quirk: this semester starts on Monday.
         if first_day == "2023-06-27":
             first_day = "2023-06-26"
         semester_id = str(obj.get("xnxq") or "")
@@ -191,17 +170,12 @@ class InfoClient:
         week_count = 12 if suffix == "3" else 18
         return Calendar(first_day=first_day, semester_id=semester_id, week_count=week_count)
 
-    # ---------------- transcript ----------------
     def get_transcript(self, *, graduate: bool = False) -> list[TranscriptCourse]:
-        """仅取课程列表。GPA 汇总用 ``get_transcript_detail()``。"""
+        """Return only courses; use ``get_transcript_detail()`` for GPA summary."""
         return self.get_transcript_detail(graduate=graduate).courses
 
     def get_transcript_detail(self, *, graduate: bool = False) -> Transcript:
-        """完整成绩单（全部学期）。
-
-        BKS 页 6 列：0=课程号, 1=课程名, 2=学分, 3=成绩, 4=绩点, 5=学年-学期
-        YJS 页 14 列：3=name, 5=credit, 7=必修flag, 9=grade, 11=point, 13=semester
-        """
+        """Return the full transcript across all semesters."""
         url = (ZHJW_TRANSCRIPT_YJS_URL if graduate
                else f"{ZHJW_TRANSCRIPT_BKS_URL}&flag=di1")
         r = self.http.get(url, timeout=30)
@@ -209,7 +183,7 @@ class InfoClient:
         if r.status_code != 200:
             raise SessionExpired(f"transcript GET failed: status={r.status_code}")
         html = r.content.decode("gb2312", errors="replace")
-        if "loginForm" in html or "请输入帐号" in html:
+        if "loginForm" in html or INFO_LOGIN_FORM_MARKER in html:
             raise SessionExpired("transcript page redirected to login")
         soup = BeautifulSoup(html, "html.parser")
         table = soup.select_one("[cellspacing='1']")
@@ -270,7 +244,6 @@ class InfoClient:
             ),
         )
 
-    # ---------------- timetable ----------------
     def get_timetable(
         self,
         start_date: str,
@@ -278,10 +251,7 @@ class InfoClient:
         *,
         graduate: bool = False,
     ) -> list[TimetableEvent]:
-        """``start_date`` / ``end_date`` 是 ``YYYY-MM-DD`` 字符串（含两端）。
-
-        返回的 events 覆盖上课 / 实验 / 考试以及 zhjw 返回的任何其它类型。
-        """
+        """Return timetable events for the inclusive YYYY-MM-DD date range."""
         prefix = ZHJW_TIMETABLE_YJS_PREFIX if graduate else ZHJW_TIMETABLE_BKS_PREFIX
         url = (prefix + start_date.replace("-", "")
                + ZHJW_TIMETABLE_MIDDLE + end_date.replace("-", "")

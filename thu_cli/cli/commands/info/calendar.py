@@ -1,4 +1,4 @@
-"""``thu info calendar`` — 本学期教学日历（首日 + 教学周）。"""
+"""``thu info calendar`` command."""
 from __future__ import annotations
 
 import argparse
@@ -8,11 +8,12 @@ from ..._common import CommandContext, add_network_flags
 from ...output import register_renderer
 
 NAME = "calendar"
-HELP = "本学期教学日历（首日 + 教学周数）"
+HELP = "CMD_INFO_CALENDAR"
 
 
 def register(subparsers: argparse._SubParsersAction) -> None:
-    p = subparsers.add_parser(NAME, help=HELP, description=HELP)
+    help_text = getattr(M, HELP)
+    p = subparsers.add_parser(NAME, help=help_text, description=help_text)
     add_network_flags(p)
     p.add_argument("--user", help=M.HELP_USER)
     p.set_defaults(_handler=handle)

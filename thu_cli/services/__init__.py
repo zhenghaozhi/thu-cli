@@ -1,21 +1,4 @@
-"""``services`` — 业务编排层。在 ``sdk`` 之上叠加：
-
-    - profile / 路径解析（依赖 ``config``）
-    - ``SsoSession`` lazy bootstrap + 自动重登
-    - 跨课程并发 fanout + warning 收集
-    - 统一返回形状 ``Listing[T]`` / ``CourseScopedListing[T]``
-
-只被 ``cli`` 引用；``sdk`` 不依赖本层（架构约束，``tests/architecture.py`` 钉死）。
-
-外部 SDK 用户若不需要这些便利，可以跳过本层直接构造 ``SsoSession`` + ``XxxClient``。
-
-公开接口：
-    BaseService                共用 ensure_sso / with_reauth / fanout_parallel
-    Listing / CourseScopedListing / ServiceWarning
-    AuthService                profile / 登录用例
-    LearnService               网络学堂业务服务
-    InfoService                信息门户业务服务
-"""
+"""Service orchestration layer on top of the SDK."""
 from __future__ import annotations
 
 from .auth import (

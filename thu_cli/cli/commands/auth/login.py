@@ -1,7 +1,4 @@
-"""``thu auth login`` — 登录并预热已知服务。
-
-支持两阶段（``--stage send`` / ``--stage verify --code XXX``）以适配脚本 / 外部 2FA 代理。
-"""
+"""``thu auth login`` command."""
 from __future__ import annotations
 
 import argparse
@@ -11,11 +8,12 @@ from ....config import M
 from ..._common import CommandContext, add_network_flags
 
 NAME = "login"
-HELP = "登录并预热当前支持的服务（learn / info portal / transcript / timetable）"
+HELP = "CMD_AUTH_LOGIN"
 
 
 def register(subparsers: argparse._SubParsersAction) -> None:
-    p = subparsers.add_parser(NAME, help=HELP, description=HELP)
+    help_text = getattr(M, HELP)
+    p = subparsers.add_parser(NAME, help=help_text, description=help_text)
     add_network_flags(p)
     p.add_argument("--user", help=M.HELP_USER)
     p.add_argument("--no-single-login", action="store_true", help=M.HELP_NO_SINGLE_LOGIN)

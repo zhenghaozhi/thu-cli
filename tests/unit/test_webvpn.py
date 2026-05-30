@@ -1,4 +1,4 @@
-"""``core.webvpn`` 单元测试。"""
+"""Unit tests for ``core.webvpn``."""
 from __future__ import annotations
 
 import pytest

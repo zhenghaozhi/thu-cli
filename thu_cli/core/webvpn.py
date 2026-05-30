@@ -1,13 +1,11 @@
-"""webvpn.tsinghua.edu.cn URL 改写工具。
+"""webvpn.tsinghua.edu.cn URL rewriting helpers.
 
-webvpn 用 URL 路径段把内网 host 编码成混淆 hash，路径形如：
+webvpn encodes the inner host as an obfuscated hash in the URL path:
 
     https://webvpn.tsinghua.edu.cn/<scheme>[-port]/<host_hash>/<inner_path>
 
-例如 ``https://info.tsinghua.edu.cn/f/foo`` →
+Example: ``https://info.tsinghua.edu.cn/f/foo`` becomes
 ``https://webvpn.tsinghua.edu.cn/https/<info_hash>/f/foo``
-
-``WEBVPN_HOST_HASH`` 维护 host → hash 的映射，需要新 host 时直接往里加。
 """
 from __future__ import annotations
 
@@ -15,7 +13,7 @@ import re
 
 WEBVPN_BASE = "https://webvpn.tsinghua.edu.cn"
 
-# host → webvpn-encoded host hash. 抄自 thu-info-lib HOST_MAP；只加我们用到的。
+# host -> webvpn-encoded host hash. Keep only hosts used by this project.
 WEBVPN_HOST_HASH: dict[str, str] = {
     "info2021.tsinghua.edu.cn":  "77726476706e69737468656265737421f9f9479375603a01301c9aa596522b208e9cd9c9e383ff3f",
     "info.tsinghua.edu.cn":      "77726476706e69737468656265737421f9f9479369247b59700f81b9991b2631506205de",
@@ -36,12 +34,7 @@ WEBVPN_HOST_HASH: dict[str, str] = {
 
 
 def webvpn_url(host: str, path: str, *, scheme: str = "https") -> str:
-    """拼一个 webvpn 代理 URL。
-
-    例：
-        webvpn_url("zhjw.cic.tsinghua.edu.cn", "/cj.cjCjbAll.do", scheme="http")
-        → https://webvpn.tsinghua.edu.cn/http/<zhjw_hash>/cj.cjCjbAll.do
-    """
+    """Build a webvpn proxy URL for an inner host and path."""
     if host not in WEBVPN_HOST_HASH:
         raise KeyError(f"no webvpn hash for host {host!r}; add it to WEBVPN_HOST_HASH")
     h = WEBVPN_HOST_HASH[host]
@@ -51,15 +44,7 @@ def webvpn_url(host: str, path: str, *, scheme: str = "https") -> str:
 
 
 def webvpn_translate(url: str) -> str:
-    """把一个原始的清华内网 URL 翻译成 webvpn 代理形式。
-
-    主要用于 info portal 的 ``onlineAppRedirect`` 返回的内网 URL — 必须改写后才能 fetch。
-
-    支持：
-        ``http://1.2.3.4:port/path`` → ``https://webvpn.../http-port/<hash>/path``
-        ``scheme://host.tsinghua.edu.cn[:port]/path``
-            → ``https://webvpn.../scheme[-port]/<hash>/path``
-    """
+    """Translate an inner Tsinghua URL to its webvpn proxy form."""
     ip_match = re.match(r"http://(\d+\.\d+\.\d+\.\d+):(\d+)/(.+)", url)
     if ip_match:
         ip, port, path = ip_match.groups()

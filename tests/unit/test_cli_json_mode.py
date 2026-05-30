@@ -33,7 +33,6 @@ def test_whoami_json_with_no_profile_emits_json(capsys):
     rc = dispatch(["--json", "auth", "whoami"])
     assert rc == 1
     captured = capsys.readouterr()
-    # stdout 必须是合法 JSON（user=None）
     payload = json.loads(captured.out)
     assert payload == {"user": None}
 
@@ -53,12 +52,11 @@ def test_whoami_no_json_human_readable(capsys):
     rc = dispatch(["auth", "whoami"])
     assert rc == 0
     out = capsys.readouterr().out.strip()
-    # 非 --json 模式下输出的就是裸 user id
     assert out == "2023012168"
 
 
 def test_thu_cli_error_emits_json_on_stderr(capsys):
-    """``--json`` mode 下抛 ThuCliError 应该在 stderr 输出 JSON 错误对象。"""
+    """``--json`` mode should write a JSON error object to stderr."""
     from thu_cli.cli.main import _print_thu_error
     from thu_cli.core.errors import BadCredentials
 
@@ -71,7 +69,7 @@ def test_thu_cli_error_emits_json_on_stderr(capsys):
 
 
 def test_thu_cli_error_human_mode_no_json(capsys):
-    """``--json`` 关闭时 ThuCliError 走人类文案，**不**输出 JSON。"""
+    """Human mode should write prose, not JSON."""
     from thu_cli.cli.main import _print_thu_error
     from thu_cli.core.errors import BadCredentials
 

@@ -1,13 +1,13 @@
-"""``config.i18n`` 单元测试 — lang 切换。"""
+"""Unit tests for ``config.i18n`` language selection."""
 from __future__ import annotations
 
 
 def test_default_is_zh(monkeypatch):
     monkeypatch.delenv("THU_CLI_LANG", raising=False)
     monkeypatch.delenv("LANG", raising=False)
-    from thu_cli.config.i18n import M
+    from thu_cli.config.i18n import ZH, M
     assert M.PROFILE == "Profile"
-    assert M.AUTH_DESC == "清华统一认证"
+    assert M.AUTH_DESC == ZH["AUTH_DESC"]
 
 
 def test_explicit_en(monkeypatch):

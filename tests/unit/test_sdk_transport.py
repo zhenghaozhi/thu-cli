@@ -1,4 +1,4 @@
-"""``sdk.transport`` 单元测试。"""
+"""Unit tests for ``sdk.transport``."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -88,8 +88,6 @@ def test_remote_file_filename_sanitizes():
     rf = RemoteFile(id="x", name="bad/name.pdf", download_url="https://e/d")
     assert rf.filename() == "bad_name.pdf"
 
-
-# ---------------- csrf_params / json_or_expired smoke ----------------
 def test_csrf_params_missing_token_raises():
     import requests
 

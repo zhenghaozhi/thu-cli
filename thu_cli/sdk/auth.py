@@ -1,27 +1,14 @@
-"""清华统一身份认证（SSO）— SsoSession 实现。
+"""Tsinghua SSO implementation built around ``SsoSession``.
 
-设计原则：
-    - 协议层零 print / input：交互通过 ``AuthInteraction`` 注入回调
-    - ``id.tsinghua`` 是 master 凭证；多 realm（learn / webvpn / git / cloud）共享
-      一份 device fingerprint；一次 2FA 后服务端永久信任此设备，跨 realm 不再触发
-    - webvpn realm 内的 CampusApp（info / transcript / timetable / ...）按需 lazy
-      bootstrap；``INFO_PORTAL`` 是 default-policy app 的隐式前置依赖
-    - **零 ``config`` 依赖**：所有路径作为参数传入。CLI 的 profile/path 解析在
-      services 层。SDK 用户可以完全跳过 services / config，直接构造 ``SsoSession``。
-
-公共接口：
-    SsoSession                       核心会话对象
-    SsoSession.load(path)            从 session.json 反序列化（cookies + bootstrap 时间戳）
-    SsoSession.save(path)            持久化到 session.json（**不存密码**）
-    SsoSession.ensure_realm(realm)   lazy bootstrap 一个 realm
-    SsoSession.ensure_app(app)       lazy bootstrap 一个 campus app
-    SsoSession.verify_realm(realm)   ping verify_url 判活
-    SsoSession.verify_app(app)       同上但 for app
-    SsoSession.resume_2fa(realm, choice, code)  续上两阶段 2FA 的 verify 阶段
-
-    AuthInteraction / AuthNetwork / AuthPolicy   注入交互/网络/策略选项
-    Device                                       设备指纹
-    dump_cookies / load_cookies / sm2_encrypt    工具函数
+Design notes:
+    - The protocol layer never prints or reads input directly; interaction is
+      injected through ``AuthInteraction`` callbacks.
+    - ``id.tsinghua`` is the master credential source. Realms share one device
+      fingerprint, and a trusted device usually avoids repeated 2FA.
+    - Campus apps inside the webvpn realm are bootstrapped lazily. Default
+      policy apps depend on ``INFO_PORTAL``.
+    - The SDK has no ``config`` dependency. Paths and callbacks are injected by
+      services or by SDK users directly.
 """
 from __future__ import annotations
 
@@ -63,11 +50,20 @@ from ..core.errors import (
 )
 from ..core.realms import Realm
 from ..core.webvpn import webvpn_translate
+from ._literals import (
+    SERVER_NO,
+    SERVER_YES,
+    SSO_BAD_CREDENTIALS_MARKER,
+    SSO_DOUBLE_AUTH_MARKER,
+    SSO_LOGIN_SUCCESS_MARKER,
+    SSO_NO_PERMISSION_MARKER,
+    SSO_NOT_LOGGED_IN_MARKER,
+    SSO_TRUST_DEVICE_LIMIT_MARKER,
+)
 
 logger = logging.getLogger("thu_cli.sdk.auth")
 
-# 只有当用户显式选择 verify_tls=False 时才静音 urllib3 的警告。模块导入时**不**
-# 全局静音 —— 别污染其它 requests 用户。
+# Silence urllib3 warnings only after the user explicitly disables TLS checks.
 _warnings_silenced = False
 
 
@@ -77,38 +73,31 @@ def _silence_insecure_warnings_once() -> None:
         requests.packages.urllib3.disable_warnings(InsecureRequestWarning)
         _warnings_silenced = True
 
-# ---------------- 常量 ----------------
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
 
 _MSG_SELECTORS = ("#msg_note", ".alert-danger", ".error", ".red")
 
-# id.tsinghua 的 SM2 公钥；经验上跨 realm/APP_ID 保持一致（May 2026 验证）。
-# 拿到 form 自带的 pubkey 时优先用，缺失（短自跳转页）时 fallback 到这个常量。
+# id.tsinghua SM2 public key. Prefer a pubkey from the form when present.
 SM2_PUBKEY_FALLBACK = (
     "04d0c9e1ae89279fe05b435d63e3eba437bf510e09da5f71558974a19dc596724227f08dc2fc6e74bbb9d8b468d4dd5205e9b6793a3bbc48df3fdf219b3ea140e3"
 )
 
 
-# ---------------- 选项对象 ----------------
 @dataclass(frozen=True)
 class AuthInteraction:
-    """所有需要外部提供数据/决策的回调；CLI 注入终端实现，SDK 用户注入自己的实现。"""
+    """Callbacks for data and decisions supplied by the caller."""
     passwd_fn: Callable[[], str] | None = None
     on_2fa_choice: Callable[[dict], str] | None = None
     on_code: Callable[[str], str] | None = None
     on_captcha: Callable[[bytes], str] | None = None
-    # bool / "yes"/"no"/"ask" / 无参 callable —— 归一化到 _normalize_trust_device
     trust_device: bool | str | Callable[[], bool] = False
+    code_prompt: Callable[[str], str] | None = None
 
 
 @dataclass(frozen=True)
 class AuthNetwork:
-    """协议无关的网络与调试设置。
-
-    ``verify_tls`` 默认 True —— 工具持有 SSO cookie + 设备指纹，校验证书是必要的
-    安全姿态。校园网 / proxy 抓包等场景请显式设为 False（同时静音 urllib3 警告）。
-    """
+    """Protocol-independent network and debugging options."""
     verify_tls: bool = True
     trust_env: bool = True
     debug_dir: Path | None = None
@@ -117,17 +106,13 @@ class AuthNetwork:
 
 @dataclass(frozen=True)
 class AuthPolicy:
-    """登录策略：2FA 偏好 / 单点登录 / 强制重 bootstrap。
-
-    ``force_login=True`` 绕过缓存（cookies + bootstrap 时间戳）强制重新走 bootstrap。
-    """
+    """Login strategy: 2FA preference, single-login, and forced bootstrap."""
     prefer_2fa: str | None = None
     single_login: bool = True
     single_login_key: str | None = None
     force_login: bool = False
 
 
-# ---------------- 文件 / Cookie helper ----------------
 def _write_private_json(path: Path, data: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -149,18 +134,16 @@ def load_cookies(jar: requests.cookies.RequestsCookieJar, data: list[dict] | Non
         jar.set(c["name"], c["value"], domain=c.get("domain"), path=c.get("path", "/"))
 
 
-# ---------------- SM2 ----------------
 def sm2_encrypt(plain: str, pubkey_hex: str) -> str:
-    """与 sm2Util.js 等价：gmssl mode=1 (C1C2C3) + "04" 前缀。"""
+    """Match sm2Util.js: gmssl mode=1 (C1C2C3) plus the ``04`` prefix."""
     key = pubkey_hex[2:] if pubkey_hex.startswith("04") else pubkey_hex
     ct = sm2.CryptSM2(public_key=key, private_key="", mode=1).encrypt(plain.encode("utf-8")).hex()
     return "04" + ct
 
 
-# ---------------- 设备指纹 ----------------
 @dataclass
 class Device:
-    """本地持久化设备指纹。"""
+    """Locally persisted device fingerprint."""
     fingerprint: str
     fingerGenPrint: str
     fingerGenPrint3: str
@@ -181,7 +164,6 @@ class Device:
         return dev
 
 
-# ---------------- trust_device 归一化 ----------------
 def _normalize_trust_device(arg: bool | str | Callable[[], bool]) -> Callable[[], bool]:
     if callable(arg):
         return arg
@@ -189,16 +171,15 @@ def _normalize_trust_device(arg: bool | str | Callable[[], bool]) -> Callable[[]
         return (lambda: True) if arg else (lambda: False)
     if isinstance(arg, str):
         v = arg.strip().lower()
-        if v in ("yes", "y", "true", "是"):
+        if v in ("yes", "y", "true", SERVER_YES):
             return lambda: True
-        if v in ("no", "n", "false", "否"):
+        if v in ("no", "n", "false", SERVER_NO):
             return lambda: False
         if v == "ask":
             return lambda: False
     raise ValueError(f"invalid trust_device: {arg!r} (expected bool / 'ask' / 'yes'|'no' / callable)")
 
 
-# ---------------- HTML 解析 helper ----------------
 def _extract_message(html: str) -> str:
     soup = BeautifulSoup(html, "html.parser")
     for sel in _MSG_SELECTORS:
@@ -227,10 +208,7 @@ def _extract_sm2_pubkey(html: str) -> str | None:
 
 
 def _extract_anchor_href(html: str, base_url: str) -> str | None:
-    """在 HTML 中找跳转目标：``<a href>``、``<form action>`` 或 ``window.location`` JS。
-
-    用于 login_check / OAuth 回调后跟随链路回到 realm 的 cookie 域。
-    """
+    """Find a redirect target in anchors, forms, or simple JS redirects."""
     soup = BeautifulSoup(html, "html.parser")
     for node in soup.find_all(["a", "form"]):
         href = node.get("href") or node.get("action") or ""
@@ -249,20 +227,8 @@ def _safe_label(label: str) -> str:
     return re.sub(r"[^a-zA-Z0-9_.-]+", "_", label).strip("_")
 
 
-# ---------------- 主类 ----------------
 class SsoSession:
-    """清华统一身份会话。
-
-    生命周期：
-        __init__()                构造空会话（装好 http / device / 调试 hook）
-        SsoSession.load(path)     从 session.json 恢复
-        ensure_realm(realm)       lazy bootstrap 一个 realm
-        ensure_app(app)           lazy bootstrap 一个 campus app（递归 parent_app + realm）
-        save(path)                持久化（cookies + bootstrap 时间戳；**不存密码**）
-
-    密码缓存：密码在 ``_resolve_password()`` 第一次拿到后存在内存（``_cached_password``），
-    供后续 ensure_app 复用——避免每个 subsystem 都 re-prompt。**仅内存，绝不写盘。**
-    """
+    """Tsinghua SSO session with lazy realm and campus-app bootstrap."""
 
     def __init__(
         self,
@@ -281,7 +247,6 @@ class SsoSession:
         })
         self.http.verify = bool(verify_tls)
         if not verify_tls:
-            # 静音 urllib3 的 InsecureRequestWarning —— 只在用户显式 opt out 时
             _silence_insecure_warnings_once()
         self.http.trust_env = bool(trust_env)
         self.device: Device | None = device
@@ -290,10 +255,8 @@ class SsoSession:
         self.captcha_path: Path | None = Path(captcha_path) if captcha_path else None
         self.on_event = on_event
         self._step_idx: int = 0
-        # bootstrap 状态
-        self._bootstrapped: dict[str, datetime] = {}     # realm_id → 最近 bootstrap 时间
-        self._app_bootstrapped: dict[str, datetime] = {}  # app_id → 最近 bootstrap 时间
-        # 内存缓存
+        self._bootstrapped: dict[str, datetime] = {}
+        self._app_bootstrapped: dict[str, datetime] = {}
         self._cached_password: str | None = None
         self._cached_sm2_pubkey: str | None = None
         if self.debug_dir:
@@ -305,7 +268,7 @@ class SsoSession:
 
     def _require_device(self) -> Device:
         if self.device is None:
-            raise AuthError("SsoSession 缺 device；请构造时传 device=Device.load_or_create(path)")
+            raise AuthError("SsoSession requires a device; pass device=Device.load_or_create(path)")
         return self.device
 
     def _resolve_password(self, interaction: AuthInteraction | None) -> str:
@@ -317,7 +280,6 @@ class SsoSession:
             return pw
         raise AuthError("password required; provide interaction.passwd_fn or pre-cache _cached_password")
 
-    # ---------------- 调试 hook（公开） ----------------
     def dump_response(self, label: str, response: requests.Response) -> None:
         logger.debug("[%s] %s %d ct=%s len=%d",
                      label, response.url, response.status_code,
@@ -331,7 +293,7 @@ class SsoSession:
         meta = {
             "url": response.url,
             "status_code": response.status_code,
-            "headers": dict(response.headers),  # 可能含 Set-Cookie；故文件 0600
+            "headers": dict(response.headers),  # may include Set-Cookie; keep files private
             "history": [
                 {"status_code": h.status_code, "url": h.url, "location": h.headers.get("Location")}
                 for h in response.history
@@ -348,7 +310,6 @@ class SsoSession:
         suffix = ".json" if "json" in ct else (".html" if "html" in ct else ".bin")
         body_path = self.debug_dir / f"{stem}{suffix}"
         body_path.write_bytes(response.content)
-        # 私有化文件权限：dumps 可能含 cookie / pwd-form / SSO ticket — 跟 session.json 一样对待
         for path in (headers_path, body_path):
             try:
                 os.chmod(path, 0o600)
@@ -358,9 +319,8 @@ class SsoSession:
     def restore_step_idx(self, step_idx: int) -> None:
         self._step_idx = int(step_idx)
 
-    # ---------------- 持久化 ----------------
     def save(self, path: Path) -> Path:
-        """写 session.json（cookies + bootstrap 时间戳）；密码绝不入盘。"""
+        """Write session cookies and bootstrap timestamps; never write passwords."""
         _write_private_json(path, {
             "username": self.username,
             "cookies": dump_cookies(self.http.cookies),
@@ -371,7 +331,7 @@ class SsoSession:
 
     @classmethod
     def load(cls, path: Path, **session_kwargs: Any) -> SsoSession | None:
-        """从 path 读 session；文件不存在返回 None。"""
+        """Load a saved session, returning ``None`` when the file is absent."""
         if not path.exists():
             return None
         data = json.loads(path.read_text(encoding="utf-8"))
@@ -390,10 +350,8 @@ class SsoSession:
                 pass
         return s
 
-    # ---------------- realm / app verify ----------------
     def verify_realm(self, realm: Realm) -> bool:
-        """Ping ``realm.verify_url``；session 看上去活着返回 True。"""
-        # learn 的 verify_url 需要 _csrf；缺失时直接 403
+        """Ping ``realm.verify_url`` and return whether the session looks alive."""
         params = None
         if realm.id == "learn":
             token = self.http.cookies.get("XSRF-TOKEN", domain=realm.cookie_domain)
@@ -407,7 +365,6 @@ class SsoSession:
             return False
         if r.status_code != 200:
             return False
-        # learn 特殊：还要验响应形状（JSON 含 semester id）；webvpn 只要 200 不跳转就行
         if realm.id == "learn":
             try:
                 return bool(r.json().get("result", {}).get("id"))
@@ -416,9 +373,8 @@ class SsoSession:
         return True
 
     def verify_app(self, app: CampusApp) -> bool:
-        """Ping ``app.verify_url``；app session 活着返回 True。"""
+        """Ping ``app.verify_url`` and return whether the app session looks alive."""
         if not app.verify_url:
-            # 无干净 verify endpoint；按 bootstrap 时间戳判定
             return app.id in self._app_bootstrapped
         try:
             r = self.http.get(app.verify_url, timeout=15, allow_redirects=False)
@@ -432,7 +388,6 @@ class SsoSession:
             return False
         return True
 
-    # ---------------- bootstrap entry points ----------------
     def ensure_realm(
         self,
         realm: Realm,
@@ -441,11 +396,7 @@ class SsoSession:
         policy: AuthPolicy | None = None,
         defer_2fa: bool = False,
     ) -> None:
-        """Lazy bootstrap 一个 realm。cookies 仍有效时 no-op。
-
-        ``defer_2fa=True`` 在 SEND_CODE 后抛 ``TwoFactorPending`` 而不继续；调用方
-        持久化 pending 状态后用 ``resume_2fa`` 继续。CLI 两阶段登录用这个。
-        """
+        """Lazy-bootstrap a realm, no-oping while cookies are still valid."""
         policy = policy or AuthPolicy()
         if not defer_2fa and not policy.force_login and realm.id in self._bootstrapped:
             if self.verify_realm(realm):
@@ -468,7 +419,7 @@ class SsoSession:
         interaction: AuthInteraction | None = None,
         policy: AuthPolicy | None = None,
     ) -> None:
-        """Lazy bootstrap 一个 campus app。递归 ensure parent realm + parent_app。"""
+        """Lazy-bootstrap a campus app, including its parent realm/app."""
         policy = policy or AuthPolicy()
         self.ensure_realm(app.realm, interaction=interaction, policy=policy)
         if app.parent_app is not None:
@@ -491,11 +442,7 @@ class SsoSession:
         interaction: AuthInteraction | None = None,
         policy: AuthPolicy | None = None,
     ) -> None:
-        """续上两阶段 2FA（CLI 两阶段登录）。
-
-        SEND_CODE 抛出 ``TwoFactorPending`` 后调用方恢复 cookies + 提供验证码，
-        在这里完成 verify 阶段。
-        """
+        """Resume the verify step of a previously deferred 2FA flow."""
         if not self.username:
             raise AuthError("resume_2fa requires self.username (restored from stage.json)")
         interaction = interaction or AuthInteraction()
@@ -508,9 +455,6 @@ class SsoSession:
         self._follow_redirects_to_realm(realm, start=r2fa)
         self._bootstrapped[realm.id] = datetime.now()
 
-    # ============================================================
-    # Realm bootstrap 实现
-    # ============================================================
     def _bootstrap_realm(
         self,
         realm: Realm,
@@ -539,14 +483,14 @@ class SsoSession:
         )
 
     def _fetch_form_direct(self, entry_url: str) -> requests.Response:
-        """Direct realm：entry_url 就是 id.tsinghua 表单页。"""
+        """Fetch a direct realm whose entry URL is the id.tsinghua form."""
         r = self.http.get(entry_url, timeout=30)
         self.dump_response("realm_form_direct", r)
         r.raise_for_status()
         return r
 
     def _fetch_form_oauth(self, entry_url: str) -> requests.Response:
-        """OAuth realm：GET entry_url 跟 302 直到落在 id.tsinghua 表单页。"""
+        """Follow an OAuth realm entry until the id.tsinghua form is reached."""
         r = self.http.get(entry_url, timeout=30, allow_redirects=False)
         self.dump_response("realm_oauth_entry", r)
         for hop in range(12):
@@ -576,8 +520,6 @@ class SsoSession:
     ) -> None:
         pubkey = _extract_sm2_pubkey(form_response.text) or self._cached_sm2_pubkey
         if not pubkey:
-            # id.tsinghua 有时返回短自跳转页而不是完整表单。SM2 公钥经验上跨 realm/APP_ID
-            # 稳定，fallback 到常量后仍 POST 到 canonical form URL。
             pubkey = SM2_PUBKEY_FALLBACK
         self._cached_sm2_pubkey = pubkey
         captcha = self._handle_captcha(form_response.text, interaction.on_captcha)
@@ -592,28 +534,24 @@ class SsoSession:
         )
         body = r.text
 
-        # 按响应形状分支
         if r.status_code in (301, 302):
-            # 无 2FA 需求；跟 Location 链路即可
             if r.headers.get("Location"):
                 self._follow_redirects_to_realm(realm, start=r)
             return
         if _extract_anchor_href(body, r.url):
-            # 信任设备生效：anchor 里直接有 ticket
-            self._event("info", f"服务端跳过 2FA（信任设备生效），follow ticket for realm {realm.id}")
+            self._event("info", f"server skipped 2FA for trusted device; follow ticket for realm {realm.id}")
             self._follow_redirects_to_realm(realm, start=r)
             return
 
         msg = _extract_message(body)
-        if "不正确" in msg:
+        if SSO_BAD_CREDENTIALS_MARKER in msg:
             raise BadCredentials(msg)
-        if "二次认证" not in body and "doubleAuth" not in body:
-            raise AuthError(f"未知响应 len={len(body)} msg={msg!r}")
+        if SSO_DOUBLE_AUTH_MARKER not in body and "doubleAuth" not in body:
+            raise AuthError(f"unexpected SSO response len={len(body)} msg={msg!r}")
 
-        # 需要 2FA
         approaches = self._da_post(action="FIND_APPROACHES")
         if approaches.get("result") != "success":
-            raise AuthError(f"FIND_APPROACHES 失败: {approaches}")
+            raise AuthError(f"FIND_APPROACHES failed: {approaches}")
         if policy.prefer_2fa:
             choice = policy.prefer_2fa
         else:
@@ -624,7 +562,7 @@ class SsoSession:
 
         sent = self._da_post(action="SEND_CODE", type=choice)
         if sent.get("result") != "success":
-            raise AuthError(f"SEND_CODE 失败: {sent}")
+            raise AuthError(f"SEND_CODE failed: {sent}")
 
         if defer_2fa:
             raise TwoFactorPending(
@@ -637,11 +575,15 @@ class SsoSession:
 
         if interaction.on_code is None:
             raise AuthError("2FA code required; provide interaction.on_code")
-        prompt = {
-            "wechat": "请输入企业微信收到的验证码: ",
-            "mobile": "请输入短信验证码: ",
-            "totp":   "请输入 TOTP 6 位数: ",
-        }[choice]
+        prompt = (
+            interaction.code_prompt(choice)
+            if interaction.code_prompt is not None
+            else {
+                "wechat": "WeCom verification code",
+                "mobile": "SMS verification code",
+                "totp": "TOTP 6-digit code",
+            }[choice]
+        )
         r2fa = self._verify_2fa_and_follow(
             choice, interaction.on_code(prompt),
             trust_device=interaction.trust_device,
@@ -649,9 +591,6 @@ class SsoSession:
         )
         self._follow_redirects_to_realm(realm, start=r2fa)
 
-    # ============================================================
-    # CampusApp bootstrap 实现
-    # ============================================================
     def _bootstrap_app(self, app: CampusApp, *, interaction: AuthInteraction, policy: AuthPolicy) -> None:
         logger.info("bootstrap app=%s policy=%s", app.id, app.policy)
         if app.policy == "id":
@@ -662,17 +601,11 @@ class SsoSession:
             raise AuthError(f"unknown app.policy: {app.policy!r}")
 
     def _bootstrap_app_id(self, app: CampusApp, *, interaction: AuthInteraction, policy: AuthPolicy) -> None:
-        """id-policy：GET id.tsinghua 表单（带 app.sso_app_id），POST 凭证。
-
-        webvpn realm bootstrap 后，hit id.tsinghua 表单 URL 带着既有 JSESSIONID 可能
-        返回 917 字节 "Found" 自跳转（因为已经认证）。我们不在乎 GET body — 只在乎
-        它刷新 session cookies。然后 POST 为该 app 的 APP_ID 拿一张新 ticket。
-        """
+        """Bootstrap an id-policy app by posting credentials for its APP_ID."""
         form_url = sso_form_url(app.sso_app_id)
         r = self.http.get(form_url, timeout=30, allow_redirects=False)
         self.dump_response(f"app_{app.id}_form_get", r)
 
-        # Pubkey 三步：cached → GET 响应提取 → 全表单页 → 静态 fallback
         pubkey = self._cached_sm2_pubkey or _extract_sm2_pubkey(r.text)
         if not pubkey:
             full_form = self.http.get(form_url + "/0", timeout=30)
@@ -683,21 +616,15 @@ class SsoSession:
         password = self._resolve_password(interaction)
         r = self._password_post(form_url, pubkey=pubkey, password=password,
                                 captcha="", single_login=policy.single_login)
-        if "登录成功" not in r.text:
+        if SSO_LOGIN_SUCCESS_MARKER not in r.text:
             msg = _extract_message(r.text)
-            if "不正确" in msg:
+            if SSO_BAD_CREDENTIALS_MARKER in msg:
                 raise BadCredentials(msg)
             raise AuthError(f"app {app.id} bootstrap: unexpected response {msg!r}")
-        # 跟 anchor 回到 app 目标站点（经 webvpn 改写）
         self._follow_redirects_generic(r, max_hops=20)
 
     def _bootstrap_app_default(self, app: CampusApp, *, interaction: AuthInteraction, policy: AuthPolicy) -> None:
-        """default-policy：调 INFO_PORTAL 的 onlineAppRedirect 带 yyfwid。
-
-        要求 INFO_PORTAL 已 bootstrap（ensure_app 已经递归保证）。如果 onlineAppRedirect
-        返回 "用户未登录" 我们抛 SessionExpired，service 层 with_reauth 会触发一次
-        INFO_PORTAL 重 bootstrap 后重试。
-        """
+        """Bootstrap a default-policy app through INFO_PORTAL onlineAppRedirect."""
         csrf = self._get_info_csrf()
         roaming_endpoint = f"{INFO_ROAMING_URL}?yyfwid={app.yyfwid}&_csrf={csrf}&machine=p"
         r = self.http.get(roaming_endpoint, timeout=30)
@@ -710,8 +637,7 @@ class SsoSession:
             ) from e
         if payload.get("result") == "error":
             msg = payload.get("msg") or "<no msg>"
-            if "未登录" in msg or "无权限" in msg:
-                # INFO_PORTAL cookies 真的过期了；invalidate 让下一次 ensure_app 重做
+            if SSO_NOT_LOGGED_IN_MARKER in msg or SSO_NO_PERMISSION_MARKER in msg:
                 self._app_bootstrapped.pop("info_portal", None)
                 raise SessionExpired(f"onlineAppRedirect for {app.id}: {msg}")
             raise AuthError(f"onlineAppRedirect for {app.id} failed: {msg}")
@@ -722,13 +648,12 @@ class SsoSession:
             roaming_url = webvpn_translate(roaming_raw)
         except (KeyError, ValueError) as e:
             raise AuthError(f"cannot translate roaming URL {roaming_raw!r}: {e}") from e
-        # Fetch roaming URL — 这一步给 webvpn 代理里的 campus app 设 cookies
         fetched = self.http.get(roaming_url, timeout=30, allow_redirects=False)
         self.dump_response(f"app_{app.id}_roam_follow", fetched)
         self._follow_redirects_generic(fetched, max_hops=15)
 
     def _get_info_csrf(self) -> str:
-        """通过 webvpn cookie-bridge endpoint 取 INFO_PORTAL 的 XSRF-TOKEN。"""
+        """Fetch the INFO_PORTAL XSRF token through the webvpn cookie bridge."""
         r = self.http.get(INFO_CSRF_COOKIE_URL, timeout=30)
         self.dump_response("info_csrf_fetch", r)
         m = re.search(r"XSRF-TOKEN=([^;]+);", r.text + ";")
@@ -736,9 +661,6 @@ class SsoSession:
             raise SessionExpired(f"info portal XSRF-TOKEN not found: {r.text[:200]!r}")
         return m.group(1)
 
-    # ============================================================
-    # 通用 helper
-    # ============================================================
     def _handle_captcha(self, form_html: str,
                         on_captcha: Callable[[bytes], str] | None) -> str:
         if not _captcha_visible(form_html):
@@ -748,7 +670,7 @@ class SsoSession:
         img = r.content
         if on_captcha is not None:
             return on_captcha(img).strip()
-        raise CaptchaRequired("需要图形验证码且未提供 on_captcha 回调", image_bytes=img)
+        raise CaptchaRequired("captcha required but no on_captcha callback was provided", image_bytes=img)
 
     def _password_post(
         self, form_url: str, *,
@@ -791,7 +713,7 @@ class SsoSession:
         data = {
             "fingerprint": device.fingerprint,
             "deviceName": device.deviceName,
-            "radioVal": "是" if choice_yes else "否",
+            "radioVal": SERVER_YES if choice_yes else SERVER_NO,
         }
         eff_key = single_login_key if single_login_key is not None else device.singleLoginKey
         if eff_key:
@@ -804,7 +726,7 @@ class SsoSession:
         )
         self.dump_response(f"savefinger_{'yes' if choice_yes else 'no'}", r)
         if not r.headers.get("Content-Type", "").startswith("application/json"):
-            raise AuthError(f"saveFinger 非 JSON status={r.status_code} body[:200]={r.text[:200]!r}")
+            raise AuthError(f"saveFinger returned non-JSON status={r.status_code} body[:200]={r.text[:200]!r}")
         return r.json()
 
     def _verify_2fa_and_follow(
@@ -816,30 +738,29 @@ class SsoSession:
         verify_action = "VERITY_TOTP_CODE" if choice == "totp" else "VERITY_CODE"
         ver = self._da_post(action=verify_action, vericode=code)
         if not (isinstance(ver, dict) and ver.get("result") == "success"):
-            raise TwoFactorFailed(f"VERITY 失败：{(ver or {}).get('msg') or ver}")
+            raise TwoFactorFailed(f"VERITY failed: {(ver or {}).get('msg') or ver}")
         obj = ver.get("object") or {}
         redirect_url = obj.get("redirectUrl")
         if not redirect_url:
-            raise AuthError(f"VERIFY 成功但缺 redirectUrl: {ver}")
+            raise AuthError(f"VERIFY succeeded but redirectUrl is missing: {ver}")
         if trust_fn():
             try:
                 sf = self._save_finger(True, single_login_key)
                 if sf.get("result") == "success":
-                    self._event("success", "信任设备登记成功")
+                    self._event("success", "trusted device registered")
                 else:
                     msg = sf.get("msg") or ""
-                    if "上限" in msg or "limit" in msg.lower():
-                        # 服务端有信任设备数上限：本次登录仍生效，但下次仍需 2FA
+                    if SSO_TRUST_DEVICE_LIMIT_MARKER in msg or "limit" in msg.lower():
                         self._event(
                             "warning",
-                            f"信任设备已达上限，本次仍会登录但下次仍需 2FA：{msg}",
+                            f"trusted device limit reached; current login continues but next login may need 2FA: {msg}",
                         )
                     else:
-                        self._event("warning", f"信任设备登记失败：{msg}")
+                        self._event("warning", f"trusted device registration failed: {msg}")
             except Exception as e:
-                self._event("warning", f"信任设备登记异常：{e}")
+                self._event("warning", f"trusted device registration raised: {e}")
         else:
-            self._event("info", "跳过信任设备登记")
+            self._event("info", "skipped trusted device registration")
 
         if redirect_url.startswith("/"):
             redirect_url = ID_BASE + redirect_url
@@ -850,7 +771,7 @@ class SsoSession:
     def _follow_redirects_to_realm(
         self, realm: Realm, *, start: requests.Response | None = None, max_hops: int = 15,
     ) -> requests.Response:
-        """跟 redirects 直到落在 ``realm.cookie_domain``（且不在 login 路径）。"""
+        """Follow redirects until reaching ``realm.cookie_domain`` outside login paths."""
         current = start
         for hop in range(max_hops):
             if current is not None:
@@ -872,7 +793,7 @@ class SsoSession:
     def _follow_redirects_generic(
         self, start: requests.Response, *, max_hops: int = 15,
     ) -> requests.Response:
-        """没有特定 target 的 redirect 跟随；直到无更多跳转。"""
+        """Follow redirects without a specific target until the chain ends."""
         current = start
         for hop in range(max_hops):
             nxt = self._step_one_redirect(current)

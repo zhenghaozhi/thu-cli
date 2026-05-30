@@ -1,4 +1,4 @@
-"""``thu auth verify`` — ping learn API 检查 session 有效性。"""
+"""``thu auth verify`` command."""
 from __future__ import annotations
 
 import argparse
@@ -8,11 +8,12 @@ from ..._common import CommandContext, add_network_flags
 from ...prompts import build_network
 
 NAME = "verify"
-HELP = "ping learn API 检查 session 是否仍有效"
+HELP = "CMD_AUTH_VERIFY"
 
 
 def register(subparsers: argparse._SubParsersAction) -> None:
-    p = subparsers.add_parser(NAME, help=HELP, description=HELP)
+    help_text = getattr(M, HELP)
+    p = subparsers.add_parser(NAME, help=help_text, description=help_text)
     add_network_flags(p)
     p.add_argument("--user", help=M.HELP_USER)
     p.set_defaults(_handler=handle)

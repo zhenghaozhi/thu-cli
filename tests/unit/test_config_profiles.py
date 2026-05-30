@@ -1,4 +1,4 @@
-"""``config.profiles`` 单元测试。"""
+"""Unit tests for ``config.profiles``."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -8,9 +8,8 @@ import pytest
 
 @pytest.fixture(autouse=True)
 def isolate_config_home(tmp_path: Path, monkeypatch):
-    """每个测试用独立 ``THU_CLI_HOME`` 避免污染真实 profile。"""
+    """Give every test an isolated ``THU_CLI_HOME``."""
     monkeypatch.setenv("THU_CLI_HOME", str(tmp_path))
-    # profiles module 在 import 时读环境变量；需要 reload
     import importlib
 
     from thu_cli.config import profiles as profiles_module
@@ -67,7 +66,7 @@ def test_remove_profile_with_delete_data(isolate_config_home, tmp_path):
 
 
 def test_remove_profile_orphan_not_deleted(isolate_config_home):
-    """Regression: ``remove_profile('orphan', delete_data=True)`` 必须**不**删未注册的孤立目录。"""
+    """Regression: removing an unregistered profile must not delete an orphan dir."""
     p = isolate_config_home
     paths = p.profile_paths("orphan")
     paths.root.mkdir(parents=True)

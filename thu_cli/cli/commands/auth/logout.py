@@ -1,4 +1,4 @@
-"""``thu auth logout`` — 删 session（默认保留 device.json）。"""
+"""``thu auth logout`` command."""
 from __future__ import annotations
 
 import argparse
@@ -7,11 +7,12 @@ from ....config import M
 from ..._common import CommandContext, add_network_flags
 
 NAME = "logout"
-HELP = "删除 session（默认保留 device.json）"
+HELP = "CMD_AUTH_LOGOUT"
 
 
 def register(subparsers: argparse._SubParsersAction) -> None:
-    p = subparsers.add_parser(NAME, help=HELP, description=HELP)
+    help_text = getattr(M, HELP)
+    p = subparsers.add_parser(NAME, help=help_text, description=help_text)
     add_network_flags(p)
     p.add_argument("--user", help=M.HELP_USER)
     p.add_argument("--all", action="store_true", help=M.HELP_LOGOUT_ALL)

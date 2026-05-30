@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "thu-cli"
+version = "0.2.0"
+description = "清华统一认证 / 网络学堂 / 信息门户的 Python CLI 和 SDK"
+requires-python = ">=3.10"
+dependencies = [
+  "beautifulsoup4",
+  "gmssl",
+  "requests",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=7",
+  "pytest-cov",
+  "ruff>=0.1",
+]
+
+[project.scripts]
+thu = "thu_cli.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["thu_cli*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-ra --strict-markers"
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+ignore = ["E501"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["E501"]

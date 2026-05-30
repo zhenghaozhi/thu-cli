@@ -1,0 +1,59 @@
+# ─────────── Python ───────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# ─────────── 打包 / 发行 ───────────
+build/
+dist/
+*.egg-info/
+*.egg
+wheels/
+pip-wheel-metadata/
+
+# ─────────── 虚拟环境 ───────────
+.venv/
+venv/
+env/
+ENV/
+
+# ─────────── 测试 / 覆盖率 ───────────
+.pytest_cache/
+.tox/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+.cache/
+
+# ─────────── lint / type check ───────────
+.ruff_cache/
+.mypy_cache/
+.pyre/
+.pytype/
+
+# ─────────── thu-cli 运行时产物 ───────────
+# 用户的本地 profile / session / device 默认在 $THU_CLI_HOME（~/.config/thu-cli）
+# 但若用户用相对路径 / 本地测试，下面这些不应该入库
+downloads/
+debug_dump/
+.live-test/
+last_captcha.jpg
+session.json
+device.json
+stage.json
+
+# ─────────── 编辑器 / IDE ───────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# ─────────── 临时 / 备份 ───────────
+*.bak
+*.tmp
+*.log
